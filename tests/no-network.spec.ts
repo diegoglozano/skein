@@ -1,11 +1,9 @@
 // The privacy invariant (REQUIREMENTS.md §7): zero requests beyond the initial
 // document and same-origin assets. Runs against the production build. This
 // gates merges to main.
-//
-// TODO(M1): extend to load a fixture through the real ingest pipeline once it
-// exists — the guarantee must hold under load, not just at rest.
 
 import { test, expect } from '@playwright/test';
+import { dropFixture } from './helpers';
 
 test('app makes no off-origin requests', async ({ page, baseURL }) => {
   const origin = new URL(baseURL!).origin;
@@ -26,6 +24,12 @@ test('app makes no off-origin requests', async ({ page, baseURL }) => {
   // Exercise what UI exists; grows with the app.
   await page.getByRole('button', { name: /your data never leaves/i }).click();
   await expect(page.getByText('Verify it yourself')).toBeVisible();
+
+  // The guarantee must hold under load, not just at rest: run the full ingest
+  // pipeline (worker + WASM fetch + OPFS writes) on a real file.
+  await dropFixture(page, 'tiny.csv');
+  await expect(page.getByTestId('ingest-summary')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('ingest-summary')).toContainText('10,000 nodes');
 
   // Let any deferred requests (lazy chunks, prefetch, telemetry-by-accident)
   // surface before judging.
