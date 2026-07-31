@@ -42,7 +42,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: node bench/generate-fixtures.mjs tiny
+      # `clustered` is needed by the WebGL2-fallback layout gate: it coarsens
+      # to two levels, so prolongation is exercised (tiny does not).
+      - run: node bench/generate-fixtures.mjs tiny clustered
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
         working-directory: tests

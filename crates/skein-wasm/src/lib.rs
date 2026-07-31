@@ -3,7 +3,7 @@
 //!
 //! Build: wasm-pack build crates/skein-wasm --target web --out-dir ../../web/src/wasm-pkg
 
-use skein_core::{EdgeIngest, IngestConfig};
+use skein_core::{EdgeIngest, IngestConfig, MultilevelLayout, SimParams};
 use wasm_bindgen::prelude::*;
 
 /// Build the multilevel layout hierarchy (§6) from a persisted directed CSR.
@@ -51,6 +51,73 @@ pub fn build_layout_hierarchy(
         out.push(&obj);
     }
     out
+}
+
+/// Multilevel force layout (§6) driven from JS, for the no-WebGPU tier: build
+/// the hierarchy and run the CPU sim entirely in Rust, stepping in chunks so
+/// the worker can post progress and stay responsive. The WebGPU tier runs the
+/// WGSL engine on the main thread instead and never touches this.
+#[wasm_bindgen]
+pub struct LayoutSession {
+    inner: MultilevelLayout,
+}
+
+#[wasm_bindgen]
+impl LayoutSession {
+    /// Coarsens the persisted directed CSR itself — the caller does not need
+    /// the hierarchy on its side. `max_sim_nodes` bounds which levels get a
+    /// force sim; larger levels are prolongation-only (§8).
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        offsets: &[u32],
+        targets: &[u32],
+        seed: u32,
+        target_nodes: u32,
+        max_levels: u32,
+        max_sim_nodes: u32,
+    ) -> LayoutSession {
+        let csr = skein_core::Csr {
+            offsets: offsets.to_vec(),
+            targets: targets.to_vec(),
+            weights: None,
+        };
+        let levels = skein_core::build_hierarchy(&csr, target_nodes, max_levels as usize);
+        LayoutSession {
+            inner: MultilevelLayout::new(
+                levels,
+                seed,
+                SimParams::default(),
+                max_sim_nodes as usize,
+            ),
+        }
+    }
+
+    /// Advance at most `budget` force iterations. Returns true when finished.
+    pub fn step(&mut self, budget: u32) -> bool {
+        self.inner.step(budget)
+    }
+
+    /// `{ level, levels, iter, iters, nodes }` — level is 1-based from the
+    /// coarsest, matching the GPU path's progress reporting.
+    pub fn progress(&self) -> js_sys::Object {
+        let p = self.inner.progress();
+        let obj = js_sys::Object::new();
+        let set = |k: &str, v: f64| {
+            js_sys::Reflect::set(&obj, &JsValue::from_str(k), &JsValue::from_f64(v)).unwrap();
+        };
+        set("level", f64::from(p.level));
+        set("levels", f64::from(p.levels));
+        set("iter", f64::from(p.iter));
+        set("iters", f64::from(p.iters));
+        set("nodes", f64::from(p.nodes));
+        obj
+    }
+
+    /// Positions at the level currently being refined, as a freshly-allocated
+    /// (so transferable) Float32Array of xy pairs.
+    pub fn positions(&self) -> js_sys::Float32Array {
+        js_sys::Float32Array::from(self.inner.positions())
+    }
 }
 
 /// Ingest session: stream CSV chunks in, get flat typed arrays out

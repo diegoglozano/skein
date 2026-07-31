@@ -49,12 +49,14 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   history in D9: symmetrize + size-capped label-propagation hierarchy in
   `skein-core` (native: 1M/10M in 2.7 s, `hierarchy_secs` in the ratio
   gate); deterministic force sim twice — WGSL compute (`web/src/layout/gpu.ts`,
-  integer fixed-point grid atomics per D2) and a CPU reference/fallback
-  (`cpu.ts`, refines ≤150k-node levels without WebGPU). Two-grid repulsion
-  (fine 5×5 + 25 mid-range coarse bodies + far residual), FA2-style linear
-  degree-dissuaded attraction, FR cooling; `tests/tune-layout.mjs` is the
-  fast CPU calibration harness (esbuild-bundles cpu.ts, prints cluster
-  separation metrics — use it before touching force params). GraphView
+  integer fixed-point grid atomics per D2) and, since the D10 port, a Rust
+  engine in `skein-core::layout` (force sim, seeding, prolongation and the
+  multilevel driver) that the ingest worker runs via WASM whenever WebGPU is
+  absent. Two-grid repulsion (fine 5×5 + 25 mid-range coarse bodies + far
+  residual), FA2-style linear degree-dissuaded attraction, FR cooling;
+  `cargo run --release --example layout_tune` is the fast calibration harness
+  (generates the clustered graph natively, prints cluster separation metrics —
+  use it before touching force params). GraphView
   computes-or-loads per-seed positions (OPFS `positions-<seed>.bin`),
   live-previews the finest level, re-layouts on seed change. Real hardware:
   clustered 20k/120k in 1.9 s @60 fps (planted communities clearly
@@ -62,6 +64,16 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   (§9: 45 s), post-layout pan/zoom min 56 fps. Same-seed determinism is
   e2e-tested across fresh browser contexts (`tests/layout.spec.ts`).
   Known: grid-banding artifact in ultra-dense hairball cores (D9).
+- **Post-M3 — layout moved into Rust (D10, 2026-07-31).** `web/src/layout/cpu.ts`
+  is gone; the algorithm lives in `crates/skein-core/src/layout.rs` and the
+  no-WebGPU tier runs it in the worker through `LayoutSession` (skein-wasm),
+  off the main thread. The port was verified bit-identical to the TS engine
+  before deletion. TypeScript keeps only what must stay there: the WGSL engine
+  and its main-thread orchestration (`multilevel.ts`), whose seeding and
+  prolongation helpers deliberately mirror the Rust ones. The fallback node cap
+  rose 150k → 1M on measured numbers (medium 1M/10M lays out in 23.9 s of the
+  45 s budget on the fallback tier); `tests/layout-fallback.spec.ts` gates the
+  path with WebGPU hidden, `tests/manual-layout-fallback.mjs` measures it.
 - **M4 — next up:** DuckDB-WASM attributes, filters, search, hover,
   selection (§10; D4 two-file ingest). Also: raise the D8 edge cap
   (post-layout headroom), and the D9 banding artifact if it bothers real
@@ -84,6 +96,7 @@ npm run dev                      # app :5173, spike at /spike.html?fixture=tiny
 npm run build -w web             # typecheck + production build (CSP injected here only)
 npm run test -w tests            # privacy gate + spike (needs fixtures + built web)
 cargo run --release --example bench | node bench/compare-bench.mjs   # ratio gate
+cargo run --release --example layout_tune    # force-param calibration (separation metrics)
 ```
 
 In managed/remote environments, point Playwright at the pre-installed browser:

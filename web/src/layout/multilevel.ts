@@ -1,17 +1,20 @@
-// Multilevel layout orchestration (§6): lay out the coarsest level with a
-// long sim, prolongate down (parent position + seeded jitter), refine each
-// finer level with a shrinking iteration budget. Runs the GPU engine when a
-// device is provided; otherwise the CPU reference handles levels up to a
-// size bound and finer levels get prolongation only (§8 graceful
-// degradation — the WebGL2 tier keeps a usable, deterministic picture).
+// Multilevel layout orchestration for the WebGPU tier (§6): lay out the
+// coarsest level with a long sim, prolongate down (parent position + seeded
+// jitter), refine each finer level with a shrinking iteration budget.
+//
+// This runs on the main thread because the WebGPU device does. The no-WebGPU
+// tier runs the same scheme entirely in WASM inside the worker — see
+// `crates/skein-core/src/layout.rs`, which owns the seeding, prolongation and
+// budget rules below in Rust. Keep the two in step: the constants and the
+// mulberry32 draw order here mirror that file deliberately.
 
-import { CpuLevelSim } from './cpu';
 import { GpuLevelSim } from './gpu';
 import {
   DEFAULT_SIM,
   WORLD_SIZE,
   levelSchedule,
   mulberry32,
+  type LayoutProgress,
   type LevelGraph,
   type SimParams,
 } from './params';
@@ -20,27 +23,17 @@ import type { HierarchyLevelBuffers } from '../workers/protocol';
 /** Iteration budget per level, coarsest first. */
 const COARSEST_ITERS = 300;
 const MIN_ITERS = 40;
-/** CPU fallback refines levels only up to this many nodes. */
-const CPU_MAX_NODES = 150_000;
 /** Yield to the event loop (and the render loop) every this many iterations. */
 const YIELD_EVERY = 4;
 
-export interface LayoutProgress {
-  level: number;
-  levels: number;
-  iter: number;
-  iters: number;
-  nodes: number;
-}
-
 export interface LayoutOptions {
   seed: number;
-  device?: GPUDevice;
+  device: GPUDevice;
   params?: SimParams;
   /** Called on yield points; return false to cancel. */
   onProgress?: (p: LayoutProgress) => boolean;
-  /** Called on yield points with a live view of current positions. */
-  onPositions?: (positions: Float32Array | GpuLevelSim, nodeCount: number) => void;
+  /** Called on yield points with the live sim, for GPU-side previewing. */
+  onPositions?: (sim: GpuLevelSim, nodeCount: number) => void;
 }
 
 function toLevelGraph(l: HierarchyLevelBuffers): LevelGraph {
@@ -87,8 +80,9 @@ const nextFrame = () =>
   );
 
 /**
- * Run the full multilevel layout. `levels[0]` is the finest (symmetrized)
- * graph. Resolves with final fine positions, or null if cancelled.
+ * Run the full multilevel layout on the GPU. `levels[0]` is the finest
+ * (symmetrized) graph. Resolves with final fine positions, or null if
+ * cancelled.
  */
 export async function multilevelLayout(
   levels: HierarchyLevelBuffers[],
@@ -101,41 +95,14 @@ export async function multilevelLayout(
   for (let li = count - 1; li >= 0; li--) {
     const level = toLevelGraph(levels[li]);
     // Coarsest gets the long sim; budgets halve as levels grow finer.
-    let iters = Math.max(MIN_ITERS, COARSEST_ITERS >> (count - 1 - li));
-    const useGpu = options.device !== undefined;
-    if (!useGpu && level.n > CPU_MAX_NODES) {
-      iters = 0; // prolongation only — CPU can't afford this level
-    }
-
+    const iters = Math.max(MIN_ITERS, COARSEST_ITERS >> (count - 1 - li));
     const schedule = levelSchedule(level.n, li === count - 1);
-    if (iters > 0 && useGpu) {
-      const sim = new GpuLevelSim(options.device!, level, positions, params, schedule, iters);
-      try {
-        for (let it = 0; it < iters; it++) {
-          sim.step();
-          if ((it + 1) % YIELD_EVERY === 0 || it === iters - 1) {
-            options.onPositions?.(sim, level.n);
-            await nextFrame();
-            const go = options.onProgress?.({
-              level: count - li,
-              levels: count,
-              iter: it + 1,
-              iters,
-              nodes: level.n,
-            });
-            if (go === false) return null;
-          }
-        }
-        positions = await sim.read();
-      } finally {
-        sim.dispose();
-      }
-    } else if (iters > 0) {
-      const sim = new CpuLevelSim(level, positions, params, schedule, iters);
+    const sim = new GpuLevelSim(options.device, level, positions, params, schedule, iters);
+    try {
       for (let it = 0; it < iters; it++) {
         sim.step();
         if ((it + 1) % YIELD_EVERY === 0 || it === iters - 1) {
-          options.onPositions?.(sim.positions, level.n);
+          options.onPositions?.(sim, level.n);
           await nextFrame();
           const go = options.onProgress?.({
             level: count - li,
@@ -147,18 +114,13 @@ export async function multilevelLayout(
           if (go === false) return null;
         }
       }
-      positions = sim.positions;
+      positions = await sim.read();
+    } finally {
+      sim.dispose();
     }
 
     if (li > 0) {
-      const finer = levels[li - 1];
-      positions = prolongate(
-        positions,
-        finer.parentMap!,
-        level.n,
-        options.seed,
-        li,
-      );
+      positions = prolongate(positions, levels[li - 1].parentMap!, level.n, options.seed, li);
     }
   }
   return positions;

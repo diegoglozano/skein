@@ -77,6 +77,17 @@ export function levelSchedule(n: number, isCoarsest: boolean): LevelSchedule {
   };
 }
 
+/** Where a multilevel run has got to; `level` is 1-based from the coarsest.
+ * Both engines report this shape — the WGSL one directly, the WASM one over
+ * the worker protocol. */
+export interface LayoutProgress {
+  level: number;
+  levels: number;
+  iter: number;
+  iters: number;
+  nodes: number;
+}
+
 /** Exponential cooling schedule. */
 export function stepAt(schedule: LevelSchedule, iter: number, iters: number): number {
   if (iters <= 1) return schedule.stepEnd;

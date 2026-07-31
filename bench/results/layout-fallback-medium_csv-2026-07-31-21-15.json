@@ -1,0 +1,50 @@
+{
+  "fixture": "medium.csv",
+  "tier": "no-webgpu (wasm layout in worker)",
+  "backend": "webgl2",
+  "nodes": 1000000,
+  "edges": 10000000,
+  "positionsHash": "21a36d30",
+  "layoutMs": 23941,
+  "layoutSecs": 23.9,
+  "phases": [
+    {
+      "phase": "starting…",
+      "secs": 0.021,
+      "sample": "starting…"
+    },
+    {
+      "phase": "building hierarchy…",
+      "secs": 4.881,
+      "sample": "building hierarchy…"
+    },
+    {
+      "phase": "1/4",
+      "secs": 1.64,
+      "sample": "level 1/4 · iter 4/300"
+    },
+    {
+      "phase": "2/4",
+      "secs": 1.5,
+      "sample": "level 2/4 · iter 4/150"
+    },
+    {
+      "phase": "3/4",
+      "secs": 4.64,
+      "sample": "level 3/4 · iter 2/75"
+    },
+    {
+      "phase": "4/4",
+      "secs": 11.28,
+      "sample": "level 4/4 · iter 3/40"
+    },
+    {
+      "phase": "ready in 23.9 s",
+      "secs": 0.401,
+      "sample": "ready in 23.9 s"
+    }
+  ],
+  "fpsMin": 43.8,
+  "fpsMedian": 58.1,
+  "usedJSHeapMB": 80
+}

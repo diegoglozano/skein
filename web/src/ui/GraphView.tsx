@@ -1,14 +1,15 @@
 // Graph view: renders a loaded graph with pan/zoom, and owns the M3 layout
-// flow — load persisted positions for the current seed, or build the §6
-// multilevel hierarchy (worker/WASM) and run the deterministic force sim
-// (WebGPU compute, CPU fallback), persisting the result per seed. The seed
-// is user-visible policy (§6): same file + seed ⇒ same picture.
+// flow — load persisted positions for the current seed, or compute them and
+// persist per seed. Two engines, same algorithm: with WebGPU the WGSL compute
+// sim runs here on the main thread (the device is main-thread-owned), so the
+// hierarchy is fetched from the worker; without it the whole multilevel layout
+// runs in WASM inside the worker and we just render its progress. The seed is
+// user-visible policy (§6): same file + seed ⇒ same picture.
 
 import { useEffect, useRef, useState } from 'react';
 import { Camera, createRenderer, type RenderGraph, type Renderer } from '../render';
-import { GpuLevelSim } from '../layout/gpu';
 import { multilevelLayout } from '../layout/multilevel';
-import { WORLD_SIZE, mulberry32 } from '../layout/params';
+import { WORLD_SIZE, mulberry32, type LayoutProgress } from '../layout/params';
 import type {
   FromWorker,
   HierarchyLevelBuffers,
@@ -112,6 +113,8 @@ export function GraphView({ graph, name, worker, onClose }: {
     let disposed = false;
     let raf = 0;
     let renderer: Renderer | null = null;
+    /** Set while a worker-side layout is in flight; see workerLayout below. */
+    let detachLayoutListener: (() => void) | null = null;
 
     const stats: RenderStats = {
       backend: 'starting…',
@@ -212,6 +215,61 @@ export function GraphView({ graph, name, worker, onClose }: {
       raf = requestAnimationFrame(frame);
 
       // ---- Layout flow: load persisted positions for this seed, or compute.
+      const onLevelProgress = (p: LayoutProgress) =>
+        setLayout(`level ${p.level}/${p.levels} · iter ${p.iter}/${p.iters}`);
+
+      /** WebGPU tier: hierarchy from the worker, WGSL sim on this thread. */
+      const gpuLayout = async (device: GPUDevice) => {
+        const hierarchyReply = awaitReply(worker, 'hierarchy', graph.id);
+        worker.postMessage({ type: 'hierarchy', id: graph.id } satisfies ToWorker);
+        const { levels } = await hierarchyReply;
+        if (disposed) return null;
+        const gpuTarget = renderer!.positionsGpuBuffer?.() ?? null;
+        return multilevelLayout(levels as HierarchyLevelBuffers[], {
+          seed,
+          device,
+          onProgress: (p) => {
+            if (disposed) return false;
+            onLevelProgress(p);
+            return true;
+          },
+          onPositions: (sim, nodeCount) => {
+            // Live preview only once the sim reaches the full-resolution level.
+            if (nodeCount === graph.nodeCount && gpuTarget) sim.copyInto(gpuTarget);
+          },
+        });
+      };
+
+      /** Fallback tier: the whole multilevel layout runs in WASM, in the
+       * worker; we only render the previews it sends. */
+      const workerLayout = () =>
+        new Promise<Float32Array | null>((resolve, reject) => {
+          const stop = () => {
+            worker.removeEventListener('message', listener);
+            detachLayoutListener = null;
+          };
+          const listener = (event: MessageEvent<FromWorker>) => {
+            const msg = event.data;
+            if (msg.type === 'layout-progress' && msg.id === graph.id) {
+              onLevelProgress(msg);
+              if (msg.positions) renderer!.updatePositions(msg.positions);
+            } else if (msg.type === 'layout-done' && msg.id === graph.id) {
+              stop();
+              resolve(msg.positions);
+            } else if (msg.type === 'error') {
+              stop();
+              reject(new Error(msg.message));
+            }
+          };
+          worker.addEventListener('message', listener);
+          // A cancelled layout never replies, so unmount has to unhook us.
+          detachLayoutListener = () => {
+            stop();
+            resolve(null);
+          };
+          worker.postMessage({ type: 'layout', id: graph.id, seed } satisfies ToWorker);
+        });
+
       const finishWith = (positions: Float32Array, state: string) => {
         renderer!.updatePositions(positions);
         stats.positionsHash = hashPositions(positions);
@@ -241,30 +299,8 @@ export function GraphView({ graph, name, worker, onClose }: {
         // The clock includes coarsening — §9's layout budget covers the
         // whole pipeline from CSR to final positions.
         const t0 = performance.now();
-        const hierarchyReply = awaitReply(worker, 'hierarchy', graph.id);
-        worker.postMessage({ type: 'hierarchy', id: graph.id } satisfies ToWorker);
-        const { levels } = await hierarchyReply;
-        if (disposed) return;
-        const gpuTarget =
-          renderer.backend === 'webgpu' ? renderer.positionsGpuBuffer?.() ?? null : null;
-        const positions = await multilevelLayout(levels as HierarchyLevelBuffers[], {
-          seed,
-          device: renderer.device,
-          onProgress: (p) => {
-            if (disposed) return false;
-            setLayout(`level ${p.level}/${p.levels} · iter ${p.iter}/${p.iters}`);
-            return true;
-          },
-          onPositions: (current, nodeCount) => {
-            // Live preview only once the sim reaches the full-resolution level.
-            if (nodeCount !== graph.nodeCount || !renderer) return;
-            if (current instanceof GpuLevelSim && gpuTarget) {
-              current.copyInto(gpuTarget);
-            } else if (current instanceof Float32Array) {
-              renderer.updatePositions(current);
-            }
-          },
-        });
+        const device = renderer.device;
+        const positions = device ? await gpuLayout(device) : await workerLayout();
         if (disposed || !positions) return;
         const ms = Math.round(performance.now() - t0);
         stats.layoutMs = ms;
@@ -292,6 +328,10 @@ export function GraphView({ graph, name, worker, onClose }: {
     return () => {
       disposed = true;
       cancelAnimationFrame(raf);
+      // A worker-side layout would otherwise keep the worker busy and delay
+      // the next one (seed change, or a different graph).
+      worker.postMessage({ type: 'cancel-layout' } satisfies ToWorker);
+      detachLayoutListener?.();
       delete window.__skeinRender;
       cleanup.then((fn) => fn?.());
     };

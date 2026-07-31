@@ -9,9 +9,14 @@ mod csr;
 mod csv;
 mod ingest;
 mod interner;
+mod layout;
 
 pub use coarsen::{build_hierarchy, coarsen_once, symmetrize, HierarchyLevel};
 pub use csr::Csr;
 pub use csv::CsvScanner;
 pub use ingest::{EdgeIngest, IngestConfig, IngestOutput};
 pub use interner::Interner;
+pub use layout::{
+    prolongate_positions, seed_disc_positions, LayoutProgress, LevelGraph, LevelSchedule, LevelSim,
+    Mulberry32, MultilevelLayout, SimParams, COARSEST_ITERS, GRID, GRID2, MIN_ITERS, WORLD_SIZE,
+};
