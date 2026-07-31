@@ -99,8 +99,43 @@ export async function listGraphs(): Promise<GraphSummary[]> {
 }
 
 /**
+ * Load a persisted graph's edges for rendering: bulk-read csr.bin and expand
+ * offsets+targets into interleaved endpoint pairs [s0, t0, s1, t1, ...] —
+ * the layout the renderer draws directly (one flat pass, no per-edge
+ * objects, §4.2).
+ */
+export async function loadGraphEdges(
+  id: string,
+): Promise<{ nodeCount: number; edgeCount: number; endpoints: Uint32Array }> {
+  const dir = await (await graphsDir()).getDirectoryHandle(id);
+  const access = await (await dir.getFileHandle('csr.bin')).createSyncAccessHandle();
+  try {
+    const header = new Uint32Array(4);
+    access.read(header, { at: 0 });
+    const [magic, n, m] = header;
+    if (magic !== CSR_MAGIC) throw new Error(`bad csr.bin magic for ${id}`);
+
+    const offsets = new Uint32Array(n + 1);
+    access.read(offsets, { at: 16 });
+    const targets = new Uint32Array(m);
+    access.read(targets, { at: 16 + 4 * (n + 1) });
+
+    const endpoints = new Uint32Array(2 * m);
+    for (let node = 0; node < n; node++) {
+      for (let e = offsets[node]; e < offsets[node + 1]; e++) {
+        endpoints[2 * e] = node;
+        endpoints[2 * e + 1] = targets[e];
+      }
+    }
+    return { nodeCount: n, edgeCount: m, endpoints };
+  } finally {
+    access.close();
+  }
+}
+
+/**
  * Re-open a persisted graph and check headers and sizes against its manifest.
- * Full buffer loading for render comes with M2; this proves the reload path.
+ * Proves the reload path independently of the render-time load.
  */
 export async function verifyGraph(id: string): Promise<{ ok: boolean; detail: string }> {
   try {

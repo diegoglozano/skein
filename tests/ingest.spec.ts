@@ -34,3 +34,48 @@ test('ingests tiny.csv: parse, counts, OPFS persistence, reload', async ({ page 
   await recent.getByRole('button', { name: 'check storage' }).first().click();
   await expect(recent).toContainText('intact on disk');
 });
+
+test('renders a loaded graph with pan and zoom (M2)', async ({ page }) => {
+  test.setTimeout(120_000);
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => pageErrors.push(err.message));
+
+  await page.goto('/');
+  await dropFixture(page, 'tiny.csv');
+  await expect(page.getByTestId('ingest-summary')).toBeVisible({ timeout: 60_000 });
+
+  await page.getByRole('button', { name: 'open graph' }).click();
+  await expect(page.getByTestId('graph-view')).toBeVisible();
+  await expect(page.getByTestId('render-backend')).toContainText(/webgpu|webgl2/, {
+    timeout: 15_000,
+  });
+
+  // Frames are actually being produced.
+  await page.waitForFunction(() => ((window as any).__skeinRender?.frames ?? 0) > 10, null, {
+    timeout: 15_000,
+  });
+
+  // Pan and zoom; the loop must keep rendering without errors.
+  const canvas = page.locator('canvas[aria-label="graph canvas"]');
+  const box = (await canvas.boundingBox())!;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 120, cy + 80, { steps: 5 });
+  await page.mouse.up();
+  await page.mouse.wheel(0, -400);
+  await page.mouse.wheel(0, 300);
+  const before = await page.evaluate(() => (window as any).__skeinRender.frames as number);
+  await page.waitForFunction(
+    (b) => ((window as any).__skeinRender?.frames ?? 0) > b + 5,
+    before,
+    { timeout: 15_000 },
+  );
+
+  expect(pageErrors, pageErrors.join('\n')).toHaveLength(0);
+
+  // Close returns to the shell.
+  await page.getByRole('button', { name: 'close' }).click();
+  await expect(page.getByRole('heading', { name: 'skein' })).toBeVisible();
+});

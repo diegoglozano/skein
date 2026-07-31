@@ -132,3 +132,25 @@ work.
 
 **Revisit if:** cosmos.gl ships a WebGPU compute path with order-of-magnitude
 sim gains at ≥1M nodes, or the reference hardware class changes materially.
+
+## D8 — Edge rendering is fill-bound; v1 draws a seeded sample (M2)
+
+Measured 2026-07-31 on the reference laptop (M3 Air, our WebGPU renderer,
+`bench/results/render-medium_csv-*.json`): drawing all 10M edges of the 1M-node
+fixture with blending runs at ~2 fps, a 2M-edge subset at ~6 fps at the fit
+view, 500k at ~24 fps, 300k at 40–60 fps. Vertex rate is not the problem —
+fragment fill is: with pre-layout (random) positions the mean edge spans
+hundreds of pixels, so 10M blended lines are billions of fragments per frame.
+This resolves §13's "bundle, sample, or density field" question for v1 the way
+the brief predicted: **sampling**.
+
+**Decision:** the renderer draws at most a fixed cap of edges (currently 300k,
+set by the ≥30 fps-at-fit-view gate on reference hardware). The endpoint pairs
+are pre-shuffled with a seeded Fisher–Yates permutation at load, so the drawn
+prefix is an unbiased, reproducible sample (D2), and the HUD says when
+sampling is active — no silent caps.
+
+**Revisit at M3:** a real layout makes most edges short (that is what a force
+layout does), which changes the fill economics entirely — the cap should rise
+or become adaptive once positions are no longer worst-case random. Density
+fields or bundling remain the answer past ~20M edges.

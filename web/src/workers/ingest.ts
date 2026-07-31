@@ -9,6 +9,7 @@ import type { FromWorker, GraphSummary, IngestOptions, ToWorker } from './protoc
 import {
   graphId,
   listGraphs,
+  loadGraphEdges,
   persistGraphBuffers,
   verifyGraph,
   writeManifest,
@@ -136,6 +137,17 @@ onmessage = async (event: MessageEvent<ToWorker>) => {
       case 'verify': {
         const { ok, detail } = await verifyGraph(msg.id);
         post({ type: 'verified', id: msg.id, ok, detail });
+        break;
+      }
+      case 'load': {
+        const { nodeCount, edgeCount, endpoints } = await loadGraphEdges(msg.id);
+        postMessage(
+          {
+            type: 'loaded',
+            graph: { id: msg.id, nodeCount, edgeCount, endpoints },
+          } satisfies FromWorker,
+          { transfer: [endpoints.buffer] },
+        );
         break;
       }
     }

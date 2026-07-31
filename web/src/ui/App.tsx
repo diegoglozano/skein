@@ -3,9 +3,11 @@ import type {
   FromWorker,
   GraphSummary,
   IngestStage,
+  LoadedGraph,
   ToWorker,
 } from '../workers/protocol';
 import { DEFAULT_INGEST_OPTIONS } from '../workers/protocol';
+import { GraphView } from './GraphView';
 
 const STAGE_LABELS: Record<IngestStage, string> = {
   parse: 'parsing + interning',
@@ -33,7 +35,9 @@ export function App() {
   const [recent, setRecent] = useState<GraphSummary[]>([]);
   const [verifyResult, setVerifyResult] = useState<{ id: string; detail: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [viewing, setViewing] = useState<{ graph: LoadedGraph; name: string } | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const namesRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     const worker = new Worker(new URL('../workers/ingest.ts', import.meta.url), {
@@ -55,6 +59,12 @@ export function App() {
           break;
         case 'verified':
           setVerifyResult({ id: msg.id, detail: `${msg.ok ? '✓' : '✗'} ${msg.detail}` });
+          break;
+        case 'loaded':
+          setViewing({
+            graph: msg.graph,
+            name: namesRef.current.get(msg.graph.id) ?? msg.graph.id,
+          });
           break;
         case 'error':
           setState({ phase: 'error', message: msg.message });
@@ -87,6 +97,21 @@ export function App() {
     },
     [ingest],
   );
+
+  const openGraph = useCallback((id: string, name: string) => {
+    namesRef.current.set(id, name);
+    workerRef.current?.postMessage({ type: 'load', id } satisfies ToWorker);
+  }, []);
+
+  if (viewing) {
+    return (
+      <GraphView
+        graph={viewing.graph}
+        name={viewing.name}
+        onClose={() => setViewing(null)}
+      />
+    );
+  }
 
   return (
     <div className="shell">
@@ -165,6 +190,9 @@ export function App() {
                 · persist {state.graph.timings.persistMs} ms — stored in this browser
               </p>
             )}
+            <button onClick={() => openGraph(state.graph.id, state.graph.name)}>
+              open graph
+            </button>
           </div>
         )}
 
@@ -185,6 +213,7 @@ export function App() {
                   {g.name} — {g.nodeCount.toLocaleString()} nodes,{' '}
                   {g.edgeCount.toLocaleString()} edges
                 </span>
+                <button onClick={() => openGraph(g.id, g.name)}>open</button>
                 <button
                   onClick={() => {
                     setVerifyResult(null);
