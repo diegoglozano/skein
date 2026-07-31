@@ -84,3 +84,51 @@ gate CI directly.
   com-Orkut) fetched by script, never committed.
 - Rust pinned via `rust-toolchain.toml`; wasm built with `wasm-pack`.
 - Node 22, npm workspaces.
+
+## D7 — M0 verdict: build our own renderer (cosmos.gl fails D3 at the 1M/10M tier)
+
+Spike executed 2026-07-31 on the reference laptop: MacBook Air 15" M3
+(Mac15,13, 16 GB), Playwright Chromium 151, headed (headless falls back to
+SwiftShader on this platform — D3's real-hardware caveat confirmed), with
+background/occlusion throttling disabled. Renderer reported as
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M3)`. Fixture `medium`
+(1M nodes / 10M edges, scale-free, seed 42). Full metrics in
+`bench/results/spike-medium-2026-07-31-11-47.json`; supporting runs
+(small/tiny, ANGLE-vs-OpenGL) alongside it. Harness:
+`tests/manual-spike.mjs` (dev server on :5173, then
+`node manual-spike.mjs <fixture> [simCapMs]`).
+
+Against the D3 pass criteria:
+
+1. **Stable layout < 90 s — fail.** 64 simulation ticks in the 120 s cap
+   (steady 0.6 fps); the layout at cutoff is an unconverged blob
+   (`spike-medium-midsim.png`). At that tick rate visual stability is tens of
+   minutes away, not a near miss.
+2. **≥ 30 fps pan/zoom — fail.** 1–2.9 fps after the sim was paused. The miss
+   is structural, not marginal: even at 100k/500k the sim runs at ~7.5 fps and
+   pan/zoom at 9–23 fps.
+3. **< 2.5 GB memory — fail.** JS heap alone reached 2.41 GB used; total
+   Chromium RSS peaked ~4.4 GB during setData+sim (browser baseline ~0.5 GB).
+
+Additional observations:
+
+- Identical numbers on ANGLE Metal and native OpenGL (`--use-angle=gl`), so
+  this is not the §8 ANGLE pathology — cosmos.gl's WebGL2 quadtree sim is
+  simply CPU/GPU-bound at this scale on integrated laptop GPUs.
+- After sim + scripted pan/zoom at 1M/10M the canvas ended as a solid magenta
+  frame with no page error (`spike-medium-final.png`) — a wedged GL
+  context/framebuffer under memory pressure. Observed once; not needed for
+  the verdict but disqualifying on its own if reproducible.
+- Environment caveats, both immaterial at 10–50× margins: the laptop was on
+  battery (Low Power Mode off; Apple-Silicon battery throttling is minor),
+  and rAF capped at ~30 fps even on an empty page, which bounds the maximum
+  observable fps but not the 0.6–7.5 fps results.
+
+**Decision: build the renderer and force sim per §4–§6.** WebGPU compute
+force sim with uniform-grid repulsion, WebGL2 render fallback, multilevel
+layout. M2/M3 stay as scoped in §11 (render path first with precomputed
+coordinates, then layout) rather than collapsing into cosmos.gl integration
+work.
+
+**Revisit if:** cosmos.gl ships a WebGPU compute path with order-of-magnitude
+sim gains at ≥1M nodes, or the reference hardware class changes materially.

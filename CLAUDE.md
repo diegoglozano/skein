@@ -2,7 +2,7 @@
 
 Orientation for a fresh session. Read REQUIREMENTS.md top to bottom before
 writing code — it is the brief. docs/DECISIONS.md records resolved design
-questions (D1–D6); don't relitigate them without new evidence.
+questions (D1–D7); don't relitigate them without new evidence.
 
 ## Roadmap and current status
 
@@ -14,23 +14,23 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   privacy badge + build-time CSP; deterministic fixture generator; Playwright
   no-network privacy gate (passing); CI (fmt/clippy/tests/wasm32/bench-ratio +
   build/privacy/spike).
-- **M0 — in progress, blocked on real hardware.** The cosmos.gl spike
-  (`web/spike.html` + `tests/spike.spec.ts`) runs end-to-end; a functional
-  SwiftShader run is recorded in `bench/results/`. The wrap-vs-build verdict
-  needs the 1M/10M run on the reference laptop, judged against DECISIONS.md
-  D3 thresholds:
-  `SPIKE_FIXTURE=medium npm run spike -w tests` (after
-  `node bench/generate-fixtures.mjs medium`). **Do not start M2/M3 renderer or
-  layout work before this verdict exists.**
-- **M1 — next up, can proceed in parallel with the M0 verdict:** streaming CSV
-  parse in WASM, batch ingest entry points on `skein-wasm::IngestSession`
-  (the per-edge path is a placeholder), ingest worker, OPFS persistence,
-  ingest benchmarks in CI.
-- **M2–M5:** not started; see §11.
+- **M0 — done, verdict: build (DECISIONS.md D7).** The 1M/10M spike ran
+  2026-07-31 on the reference laptop (M3 MacBook Air, real GPU, headed
+  Chromium) and failed all three D3 thresholds: 64 sim ticks in 120 s /
+  0.6 fps sim, 1–2.9 fps pan/zoom, 2.41 GB JS heap (~4.4 GB process peak).
+  Metrics + screenshots in `bench/results/`, harness in
+  `tests/manual-spike.mjs`. We build our own renderer/sim per §4–§6; M2/M3
+  are unblocked but need a written renderer plan before code.
+- **M1 — next up:** streaming CSV parse in WASM, batch ingest entry points on
+  `skein-wasm::IngestSession` (the per-edge path is a placeholder), ingest
+  worker, OPFS persistence, ingest benchmarks in CI.
+- **M2–M5:** not started; see §11. M2/M3 are our own renderer + multilevel
+  GPU layout per D7, not cosmos.gl integration.
 
-Relevant M0 facts already learned: cosmos.gl 3.4 is luma.gl 9 on the WebGL2
-adapter (no WebGPU today, plausible migration path); it exposes `randomSeed`
-(helps D2 determinism); its API takes flat typed arrays throughout.
+M0 facts worth keeping: headless Chromium falls back to SwiftShader even on
+GPU machines — real-hardware runs must be headed; cosmos.gl 3.4 is luma.gl 9
+on the WebGL2 adapter (no WebGPU today); its sim is equally slow on ANGLE
+Metal and native OpenGL, so the D7 fail is not the §8 ANGLE pathology.
 
 ## Commands
 
