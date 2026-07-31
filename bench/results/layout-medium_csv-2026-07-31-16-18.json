@@ -1,0 +1,21 @@
+{
+  "fixture": "medium.csv",
+  "backend": "webgpu",
+  "layoutMs": 10903,
+  "positionsHash": "df02a33d",
+  "nodes": 1000000,
+  "edges": 10000000,
+  "layoutSecs": 10.9,
+  "fpsSamples": [
+    60,
+    60.1,
+    58.9,
+    56.2,
+    58.9,
+    60,
+    60
+  ],
+  "fpsMin": 56.2,
+  "fpsMedian": 60,
+  "usedJSHeapMB": 424
+}

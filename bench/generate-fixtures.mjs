@@ -19,6 +19,9 @@ const PRESETS = {
   tiny: { nodes: 10_000, edges: 50_000 },
   small: { nodes: 100_000, edges: 500_000 },
   medium: { nodes: 1_000_000, edges: 10_000_000 },
+  // Planted communities: layout quality is judged visually on this one —
+  // a correct force layout must separate the clusters (M3).
+  clustered: { nodes: 20_000, edges: 120_000, communities: 40, pIntra: 0.92 },
 };
 
 // xorshift64*, seeded — same preset must yield byte-identical files (§6).
@@ -78,10 +81,35 @@ async function writeAll(stream, chunks) {
   }
 }
 
-async function writeFixture(name, { nodes, edges }) {
+// Planted-partition graph: nodes split into equal communities; each edge is
+// intra-community with probability pIntra, else uniform across the graph.
+function generateClustered(nodes, edges, communities, pIntra, seed = 0x5eed) {
+  const rng = makeRng(seed);
+  const src = new Uint32Array(edges);
+  const dst = new Uint32Array(edges);
+  const size = Math.floor(nodes / communities);
+  for (let e = 0; e < edges; e++) {
+    const c = Math.floor(rng() * communities);
+    const base = c * size;
+    const a = base + Math.floor(rng() * size);
+    let b;
+    if (rng() < pIntra) {
+      b = base + Math.floor(rng() * size);
+    } else {
+      b = Math.floor(rng() * nodes);
+    }
+    src[e] = a;
+    dst[e] = a === b ? base + ((a - base + 1) % size) : b;
+  }
+  return { src, dst };
+}
+
+async function writeFixture(name, { nodes, edges, communities, pIntra }) {
   mkdirSync(OUT_DIR, { recursive: true });
   const t0 = performance.now();
-  const { src, dst } = generate(nodes, edges);
+  const { src, dst } = communities
+    ? generateClustered(nodes, edges, communities, pIntra)
+    : generate(nodes, edges);
 
   // Binary: u32 pairs, header [magic, nodes, edges, reserved].
   const bin = createWriteStream(path.join(OUT_DIR, `${name}.bin`));

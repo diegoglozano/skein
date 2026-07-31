@@ -115,6 +115,17 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
 
   return {
     backend: 'webgpu',
+    device,
+
+    positionsGpuBuffer() {
+      return positionsBuf;
+    },
+
+    updatePositions(positions: Float32Array) {
+      if (positionsBuf) {
+        device.queue.writeBuffer(positionsBuf, 0, positions as Float32Array<ArrayBuffer>);
+      }
+    },
 
     setGraph(graph: RenderGraph) {
       positionsBuf?.destroy();
@@ -124,7 +135,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
 
       positionsBuf = device.createBuffer({
         size: graph.positions.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
       });
       device.queue.writeBuffer(positionsBuf, 0, graph.positions as Float32Array<ArrayBuffer>);
       // Storage bindings must be non-empty; keep a 4-byte stub for edgeless graphs.

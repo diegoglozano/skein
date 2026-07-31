@@ -5,7 +5,7 @@
 //!
 //! Run: cargo run --release --example bench
 
-use skein_core::{Csr, EdgeIngest, IngestConfig, Interner};
+use skein_core::{build_hierarchy, Csr, EdgeIngest, IngestConfig, Interner};
 use std::time::Instant;
 
 /// Deterministic xorshift so every run interns the same ids.
@@ -72,8 +72,14 @@ fn main() {
     assert_eq!(out.csr.node_count(), node_count);
     assert_eq!(out.skipped, 0);
 
+    // Multilevel coarsening (§6): symmetrize + label-propagation hierarchy.
+    let start = Instant::now();
+    let levels = build_hierarchy(&csr, 10_000, 12);
+    let hierarchy_secs = start.elapsed().as_secs_f64();
+    assert!(levels.len() > 1);
+
     println!(
-        "{{\"nodes\":{},\"edges\":{},\"intern_secs\":{:.3},\"intern_meps\":{:.1},\"csr_secs\":{:.3},\"csr_meps\":{:.1},\"csv_secs\":{:.3},\"csv_mbps\":{:.1}}}",
+        "{{\"nodes\":{},\"edges\":{},\"intern_secs\":{:.3},\"intern_meps\":{:.1},\"csr_secs\":{:.3},\"csr_meps\":{:.1},\"csv_secs\":{:.3},\"csv_mbps\":{:.1},\"hierarchy_secs\":{:.3},\"hierarchy_levels\":{}}}",
         node_count,
         m,
         intern_secs,
@@ -82,5 +88,7 @@ fn main() {
         m as f64 / csr_secs / 1e6,
         csv_secs,
         bytes.len() as f64 / csv_secs / 1e6,
+        hierarchy_secs,
+        levels.len(),
     );
 }

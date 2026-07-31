@@ -3,14 +3,23 @@
 // chunks, then persists the flat buffers to OPFS. All hot-path data stays in
 // typed arrays; this file only moves bytes and posts progress.
 
-import init, { IngestSession } from '../wasm-pkg/skein_wasm';
+import init, { build_layout_hierarchy, IngestSession } from '../wasm-pkg/skein_wasm';
 import wasmUrl from '../wasm-pkg/skein_wasm_bg.wasm?url';
-import type { FromWorker, GraphSummary, IngestOptions, ToWorker } from './protocol';
+import type {
+  FromWorker,
+  GraphSummary,
+  HierarchyLevelBuffers,
+  IngestOptions,
+  ToWorker,
+} from './protocol';
 import {
   graphId,
   listGraphs,
+  loadGraphCsr,
   loadGraphEdges,
+  loadPositions,
   persistGraphBuffers,
+  savePositions,
   verifyGraph,
   writeManifest,
   type GraphBuffers,
@@ -147,6 +156,33 @@ onmessage = async (event: MessageEvent<ToWorker>) => {
             graph: { id: msg.id, nodeCount, edgeCount, endpoints },
           } satisfies FromWorker,
           { transfer: [endpoints.buffer] },
+        );
+        break;
+      }
+      case 'hierarchy': {
+        await ready;
+        const { offsets, targets } = await loadGraphCsr(msg.id);
+        const levels = build_layout_hierarchy(offsets, targets, 10_000, 12) as unknown as
+          HierarchyLevelBuffers[];
+        postMessage({ type: 'hierarchy', id: msg.id, levels } satisfies FromWorker, {
+          transfer: levels.flatMap((l) =>
+            [l.offsets.buffer, l.targets.buffer, l.weights.buffer].concat(
+              l.parentMap ? [l.parentMap.buffer] : [],
+            ),
+          ),
+        });
+        break;
+      }
+      case 'save-positions': {
+        await savePositions(msg.id, msg.seed, msg.positions);
+        post({ type: 'positions-saved', id: msg.id });
+        break;
+      }
+      case 'load-positions': {
+        const positions = await loadPositions(msg.id, msg.seed);
+        postMessage(
+          { type: 'positions', id: msg.id, seed: msg.seed, positions } satisfies FromWorker,
+          positions ? { transfer: [positions.buffer] } : undefined,
         );
         break;
       }

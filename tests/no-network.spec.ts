@@ -31,10 +31,14 @@ test('app makes no off-origin requests', async ({ page, baseURL }) => {
   await expect(page.getByTestId('ingest-summary')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('ingest-summary')).toContainText('10,000 nodes');
 
-  // And through the render path (M2): open the graph, let it draw.
+  // And through the render + layout paths (M2/M3): open the graph, run the
+  // multilevel layout (hierarchy in WASM, sim, OPFS position save), draw.
   await page.getByRole('button', { name: 'open graph' }).click();
   await expect(page.getByTestId('render-backend')).toContainText(/webgpu|webgl2/, {
     timeout: 15_000,
+  });
+  await expect(page.getByTestId('layout-status')).toContainText(/ready|loaded/, {
+    timeout: 120_000,
   });
   await page.waitForFunction(() => ((window as any).__skeinRender?.frames ?? 0) > 10, null, {
     timeout: 15_000,

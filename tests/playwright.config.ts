@@ -33,7 +33,7 @@ export default defineConfig({
     },
     {
       name: 'app',
-      testMatch: /ingest\.spec\.ts/,
+      testMatch: /(ingest|layout)\.spec\.ts/,
       use: { baseURL: `http://localhost:${PREVIEW_PORT}` },
     },
     {

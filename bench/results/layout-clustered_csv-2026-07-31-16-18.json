@@ -1,0 +1,17 @@
+{
+  "fixture": "clustered.csv",
+  "backend": "webgpu",
+  "layoutMs": 1911,
+  "positionsHash": "a74b446e",
+  "nodes": 20000,
+  "edges": 120000,
+  "layoutSecs": 1.9,
+  "fpsSamples": [
+    60,
+    60,
+    60
+  ],
+  "fpsMin": 60,
+  "fpsMedian": 60,
+  "usedJSHeapMB": 9
+}

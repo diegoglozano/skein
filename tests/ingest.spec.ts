@@ -4,7 +4,7 @@
 // the generator is deterministic (tiny = 10k nodes / 50k edges).
 
 import { test, expect } from '@playwright/test';
-import { dropFixture } from './helpers';
+import { dropFixture, ingestAndLayout } from './helpers';
 
 test('ingests tiny.csv: parse, counts, OPFS persistence, reload', async ({ page }) => {
   test.setTimeout(120_000);
@@ -48,6 +48,10 @@ test('renders a loaded graph with pan and zoom (M2)', async ({ page }) => {
   await expect(page.getByTestId('graph-view')).toBeVisible();
   await expect(page.getByTestId('render-backend')).toContainText(/webgpu|webgl2/, {
     timeout: 15_000,
+  });
+  // Layout (M3) must settle — computed on first open, from OPFS afterwards.
+  await expect(page.getByTestId('layout-status')).toContainText(/ready|loaded/, {
+    timeout: 120_000,
   });
 
   // Frames are actually being produced.

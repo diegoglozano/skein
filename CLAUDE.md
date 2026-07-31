@@ -2,7 +2,7 @@
 
 Orientation for a fresh session. Read REQUIREMENTS.md top to bottom before
 writing code — it is the brief. docs/DECISIONS.md records resolved design
-questions (D1–D8); don't relitigate them without new evidence.
+questions (D1–D9); don't relitigate them without new evidence.
 
 ## Roadmap and current status
 
@@ -45,12 +45,28 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   so. Real-hardware gate passed (`bench/results/render-medium_csv-*.json`):
   1M/10M on WebGPU/Metal at min 40.6 / median 56.9 fps during scripted
   pan/zoom, ~81 MB JS heap. Harness: `tests/manual-render.mjs`.
-- **M3 — next up:** multilevel layout per §6 — label-propagation coarsening
-  in `skein-core`, WebGPU compute force sim with uniform-grid repulsion,
-  fixed-order accumulation (D2: no atomics), prolongate + refine.
-  Prototype the grid-repulsion kernel against WebGPU buffer/workgroup limits
-  early. Real layouts shorten edges — revisit the D8 edge cap then.
-- **M4–M5:** not started; see §11.
+- **M3 — done (2026-07-31).** Multilevel layout per §6, design + calibration
+  history in D9: symmetrize + size-capped label-propagation hierarchy in
+  `skein-core` (native: 1M/10M in 2.7 s, `hierarchy_secs` in the ratio
+  gate); deterministic force sim twice — WGSL compute (`web/src/layout/gpu.ts`,
+  integer fixed-point grid atomics per D2) and a CPU reference/fallback
+  (`cpu.ts`, refines ≤150k-node levels without WebGPU). Two-grid repulsion
+  (fine 5×5 + 25 mid-range coarse bodies + far residual), FA2-style linear
+  degree-dissuaded attraction, FR cooling; `tests/tune-layout.mjs` is the
+  fast CPU calibration harness (esbuild-bundles cpu.ts, prints cluster
+  separation metrics — use it before touching force params). GraphView
+  computes-or-loads per-seed positions (OPFS `positions-<seed>.bin`),
+  live-previews the finest level, re-layouts on seed change. Real hardware:
+  clustered 20k/120k in 1.9 s @60 fps (planted communities clearly
+  separated — the visual gate); medium 1M/10M in ~11 s wall incl. hierarchy
+  (§9: 45 s), post-layout pan/zoom min 56 fps. Same-seed determinism is
+  e2e-tested across fresh browser contexts (`tests/layout.spec.ts`).
+  Known: grid-banding artifact in ultra-dense hairball cores (D9).
+- **M4 — next up:** DuckDB-WASM attributes, filters, search, hover,
+  selection (§10; D4 two-file ingest). Also: raise the D8 edge cap
+  (post-layout headroom), and the D9 banding artifact if it bothers real
+  datasets.
+- **M5:** not started; see §11.
 
 M0 facts worth keeping: headless Chromium falls back to SwiftShader even on
 GPU machines — real-hardware runs must be headed; cosmos.gl 3.4 is luma.gl 9

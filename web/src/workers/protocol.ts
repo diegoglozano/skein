@@ -39,7 +39,19 @@ export type ToWorker =
   | { type: 'ingest'; file: File; options: IngestOptions }
   | { type: 'list' }
   | { type: 'verify'; id: string }
-  | { type: 'load'; id: string };
+  | { type: 'load'; id: string }
+  | { type: 'hierarchy'; id: string }
+  | { type: 'save-positions'; id: string; seed: number; positions: Float32Array }
+  | { type: 'load-positions'; id: string; seed: number };
+
+/** One level of the §6 multilevel hierarchy; level 0 is the symmetrized
+ * input. `parentMap` is absent on the coarsest level. */
+export interface HierarchyLevelBuffers {
+  offsets: Uint32Array;
+  targets: Uint32Array;
+  weights: Float32Array;
+  parentMap?: Uint32Array;
+}
 
 /** Flat render-ready buffers (§4.2); positions come from layout (M3) or a
  * deterministic seed until then. Transferred, not copied. */
@@ -64,4 +76,7 @@ export type FromWorker =
   | { type: 'graphs'; graphs: GraphSummary[] }
   | { type: 'verified'; id: string; ok: boolean; detail: string }
   | { type: 'loaded'; graph: LoadedGraph }
+  | { type: 'hierarchy'; id: string; levels: HierarchyLevelBuffers[] }
+  | { type: 'positions-saved'; id: string }
+  | { type: 'positions'; id: string; seed: number; positions: Float32Array | null }
   | { type: 'error'; message: string };
