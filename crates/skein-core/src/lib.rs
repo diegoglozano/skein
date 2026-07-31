@@ -4,11 +4,13 @@
 //! WASM boundary without copying per-element (REQUIREMENTS.md §4.2). No
 //! per-node or per-edge heap objects.
 
+mod coarsen;
 mod csr;
 mod csv;
 mod ingest;
 mod interner;
 
+pub use coarsen::{build_hierarchy, coarsen_once, symmetrize, HierarchyLevel};
 pub use csr::Csr;
 pub use csv::CsvScanner;
 pub use ingest::{EdgeIngest, IngestConfig, IngestOutput};

@@ -179,6 +179,15 @@ h1 {
   cursor: pointer;
 }
 
+.graph-hud .seed-input {
+  background: #11131c;
+  border: 1px solid #3a3f55;
+  color: #e6e6ea;
+  border-radius: 6px;
+  padding: 0.15rem 0.4rem;
+  width: 5.5rem;
+}
+
 .graph-view canvas {
   flex: 1;
   width: 100%;

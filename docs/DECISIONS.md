@@ -154,3 +154,52 @@ sampling is active — no silent caps.
 layout does), which changes the fill economics entirely — the cap should rise
 or become adaptive once positions are no longer worst-case random. Density
 fields or bundling remain the answer past ~20M edges.
+
+## D9 — M3 force sim: grid-aggregate repulsion, FA2-style attraction (and what didn't work)
+
+The §6 sim, as shipped, with the D2 determinism argument and the calibration
+story — three schemes were measured before one passed the visual check on the
+`clustered` fixture (40 planted communities, 20k/120k; a correct layout must
+separate them).
+
+**Repulsion.** Two uniform grids over the fixed 4096² world: 128² fine cells
+and 16² coarse cells. Per iteration each cell aggregates {count, Σposition}
+via *integer* fixed-point atomics (order-independent ⇒ deterministic; D2
+forbids float atomics, integer sums commute exactly). Each node then repels
+from: the 5×5 fine block (point-mass per cell, self removed), the 5×5 coarse
+block as 25 distinct mid-range bodies (fine-block totals subtracted exactly
+from the coarse cells containing them), and one residual far body (root −
+coarse block). The first attempt lumped everything beyond the fine block into
+the single far body: mid-range repulsion then has no direction, and the
+communities never separated — one blob with speckle. Mid-range bodies are the
+load-bearing part.
+
+**Attraction.** Linear (ForceAtlas2-style) springs along the symmetrized CSR,
+each edge divided by √((deg_i+1)(deg_j+1)) — plain FR d²/k attraction let
+1M-node scale-free hubs (degree ~10⁵) crush the whole graph into a ball ~7×
+denser than equilibrium; degree dissuasion alone was not enough because d²
+grows too fast across the graph's diameter. Coefficient calibrated so a
+typical edge balances repulsion at spacing ≈ kOpt = world/√n: per-edge
+factor = attractionScale · avgDeg · kOpt / √(deg products). Verified by a
+CPU parameter sweep (`tests/tune-layout.mjs`): separation ratio (mean
+inter-centroid distance / mean intra-cluster radius) ≈ 10.7 at defaults,
+stable under ±2× parameter changes.
+
+**Everything else.** FR displacement clamp with exponential cooling
+(schedules per level; coarsest starts hot from a seeded disc), gravity
+0.03·d toward the world centre, positions clamped to the world. Multilevel:
+coarsest 300 iterations, halving per finer level (min 40). CPU fallback
+(no WebGPU) refines levels up to 150k nodes and prolongates the rest —
+graceful degradation per §8, still deterministic.
+
+**Measured (M3 Air, WebGPU/Metal, headed, `bench/results/layout-*`):**
+clustered 20k/120k in 1.9 s end-to-end at 60 fps; medium 1M/10M in ~11 s
+wall including WASM hierarchy (§9 budget: 45 s), post-layout pan/zoom min
+56 fps. Determinism: bit-identical position hashes across fresh browser
+contexts (Playwright `layout.spec.ts`); positions persist to OPFS per seed.
+
+**Known limits, revisit at M4+:** visible grid-banding in ultra-dense
+hairball cores (cell-aggregate repulsion can't resolve sub-cell structure —
+candidate fixes: exact pairwise within own cell, or jittered grid origins
+per iteration at the cost of determinism bookkeeping); the D8 edge-draw cap
+stays at 300k though post-layout fps headroom (min 56) suggests it can rise.

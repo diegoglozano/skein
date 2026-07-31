@@ -1,36 +1,29 @@
-// M2 graph view: renders a loaded graph with pan/zoom. Positions are a
-// deterministic seeded scatter until M3's layout lands (seed shown in the
-// HUD — §6 determinism is user-visible policy, not an accident).
+// Graph view: renders a loaded graph with pan/zoom, and owns the M3 layout
+// flow — load persisted positions for the current seed, or build the §6
+// multilevel hierarchy (worker/WASM) and run the deterministic force sim
+// (WebGPU compute, CPU fallback), persisting the result per seed. The seed
+// is user-visible policy (§6): same file + seed ⇒ same picture.
 
 import { useEffect, useRef, useState } from 'react';
-import { Camera, createRenderer, type RenderGraph } from '../render';
-import type { LoadedGraph } from '../workers/protocol';
+import { Camera, createRenderer, type RenderGraph, type Renderer } from '../render';
+import { GpuLevelSim } from '../layout/gpu';
+import { multilevelLayout } from '../layout/multilevel';
+import { WORLD_SIZE, mulberry32 } from '../layout/params';
+import type {
+  FromWorker,
+  HierarchyLevelBuffers,
+  LoadedGraph,
+  ToWorker,
+} from '../workers/protocol';
 
-const WORLD_SIZE = 4096;
-export const POSITION_SEED = 42;
+export const DEFAULT_SEED = 42;
 
-// Fill-rate budget: with blending, drawn edges cost fragments proportional to
-// their on-screen length, and the zoomed-out fit view pays for every drawn
-// edge at once. Pre-layout (random) positions are the worst case — the D8
-// measurements on the M3 reference laptop: 10M edges ≈ 2 fps, 2M ≈ 6 fps at
-// fit, 500k ≈ 24 fps, 300k ≥ 30 fps with margin. The sample is unbiased and
-// reproducible because the endpoint pairs are pre-shuffled with a seeded
-// permutation. Revisit at M3: a real layout makes edges short, which changes
-// the fill economics entirely.
+// Fill-rate budget (DECISIONS.md D8): pre-layout random positions made 10M
+// full-length edges cost billions of blended fragments; post-layout edges are
+// short, but the cap stays until re-measured. Sample is a seeded permutation.
 const EDGE_DRAW_CAP = 300_000;
 
-/** mulberry32 — same generator the spike used; deterministic per seed. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function seededPositions(n: number, seed: number): Float32Array {
+function seededScatter(n: number, seed: number): Float32Array {
   const rand = mulberry32(seed);
   const xy = new Float32Array(2 * n);
   for (let i = 0; i < 2 * n; i++) xy[i] = rand() * WORLD_SIZE;
@@ -52,29 +45,65 @@ function shuffleEdgePairs(endpoints: Uint32Array, seed: number): void {
   }
 }
 
+/** FNV-1a over the position bytes — the determinism test hook. */
+function hashPositions(positions: Float32Array): string {
+  const bytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) {
+    h ^= bytes[i];
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
 interface RenderStats {
   backend: string;
   fps: number;
   nodes: number;
   edges: number;
   frames: number;
+  layoutState: string;
+  layoutMs: number | null;
+  positionsHash: string | null;
 }
 
 declare global {
   interface Window {
-    /** Test/bench hook: live render stats, updated once a second. */
+    /** Test/bench hook: live render + layout stats. */
     __skeinRender?: RenderStats;
   }
 }
 
-export function GraphView({ graph, name, onClose }: {
+/** Await one worker reply of the given type (matching graph id). */
+function awaitReply<T extends FromWorker['type']>(
+  worker: Worker,
+  type: T,
+  id: string,
+): Promise<Extract<FromWorker, { type: T }>> {
+  return new Promise((resolve) => {
+    const listener = (event: MessageEvent<FromWorker>) => {
+      const msg = event.data;
+      if (msg.type === type && ('id' in msg ? msg.id === id : true)) {
+        worker.removeEventListener('message', listener);
+        resolve(msg as Extract<FromWorker, { type: T }>);
+      }
+    };
+    worker.addEventListener('message', listener);
+  });
+}
+
+export function GraphView({ graph, name, worker, onClose }: {
   graph: LoadedGraph;
   name: string;
+  worker: Worker;
   onClose: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [backend, setBackend] = useState<string>('starting…');
   const [fps, setFps] = useState(0);
+  const [seed, setSeed] = useState(DEFAULT_SEED);
+  const [seedInput, setSeedInput] = useState(String(DEFAULT_SEED));
+  const [layoutState, setLayoutState] = useState('starting…');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -82,20 +111,38 @@ export function GraphView({ graph, name, onClose }: {
     const camera = new Camera();
     let disposed = false;
     let raf = 0;
+    let renderer: Renderer | null = null;
+
+    const stats: RenderStats = {
+      backend: 'starting…',
+      fps: 0,
+      nodes: graph.nodeCount,
+      edges: graph.edgeCount,
+      frames: 0,
+      layoutState: 'starting…',
+      layoutMs: null,
+      positionsHash: null,
+    };
+    window.__skeinRender = stats;
+    const setLayout = (s: string) => {
+      stats.layoutState = s;
+      setLayoutState(s);
+    };
 
     const run = async () => {
-      const renderer = await createRenderer(canvas);
+      renderer = await createRenderer(canvas);
       if (disposed) {
         renderer.dispose();
         return;
       }
       setBackend(renderer.backend);
+      stats.backend = renderer.backend;
 
-      shuffleEdgePairs(graph.endpoints, POSITION_SEED);
+      shuffleEdgePairs(graph.endpoints, seed);
       const renderGraph: RenderGraph = {
         nodeCount: graph.nodeCount,
         edgeCount: graph.edgeCount,
-        positions: seededPositions(graph.nodeCount, POSITION_SEED),
+        positions: seededScatter(graph.nodeCount, seed),
         endpoints: graph.endpoints,
       };
       renderer.setGraph(renderGraph);
@@ -105,7 +152,7 @@ export function GraphView({ graph, name, onClose }: {
         const w = Math.round(canvas.clientWidth * dpr);
         const h = Math.round(canvas.clientHeight * dpr);
         if (w && h && (canvas.width !== w || canvas.height !== h)) {
-          renderer.resize(w, h);
+          renderer!.resize(w, h);
           camera.setViewport(w, h);
         }
       };
@@ -114,7 +161,6 @@ export function GraphView({ graph, name, onClose }: {
       const observer = new ResizeObserver(resize);
       observer.observe(canvas);
 
-      // Input: drag to pan, wheel to zoom at cursor.
       let dragging = false;
       let lastX = 0;
       let lastY = 0;
@@ -147,20 +193,11 @@ export function GraphView({ graph, name, onClose }: {
       canvas.addEventListener('pointerup', onPointerUp);
       canvas.addEventListener('wheel', onWheel, { passive: false });
 
-      const stats: RenderStats = {
-        backend: renderer.backend,
-        fps: 0,
-        nodes: graph.nodeCount,
-        edges: graph.edgeCount,
-        frames: 0,
-      };
-      window.__skeinRender = stats;
       let windowStart = performance.now();
       let windowFrames = 0;
-
       const frame = () => {
         if (disposed) return;
-        renderer.render(camera.view(2.5 * dpr), EDGE_DRAW_CAP);
+        renderer!.render(camera.view(2.5 * dpr), EDGE_DRAW_CAP);
         stats.frames++;
         windowFrames++;
         const now = performance.now();
@@ -174,13 +211,76 @@ export function GraphView({ graph, name, onClose }: {
       };
       raf = requestAnimationFrame(frame);
 
+      // ---- Layout flow: load persisted positions for this seed, or compute.
+      const finishWith = (positions: Float32Array, state: string) => {
+        renderer!.updatePositions(positions);
+        stats.positionsHash = hashPositions(positions);
+        // Frame the actual layout, not the whole world square.
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < positions.length; i += 2) {
+          if (positions[i] < minX) minX = positions[i];
+          if (positions[i] > maxX) maxX = positions[i];
+          if (positions[i + 1] < minY) minY = positions[i + 1];
+          if (positions[i + 1] > maxY) maxY = positions[i + 1];
+        }
+        if (minX < maxX && minY < maxY) camera.fit(minX, minY, maxX, maxY, 1.15);
+        setLayout(state);
+      };
+
+      const saved = awaitReply(worker, 'positions', graph.id);
+      worker.postMessage({ type: 'load-positions', id: graph.id, seed } satisfies ToWorker);
+      const savedReply = await saved;
+      if (disposed) return;
+      if (savedReply.positions) {
+        finishWith(savedReply.positions, 'loaded from storage');
+      } else {
+        setLayout('building hierarchy…');
+        // The clock includes coarsening — §9's layout budget covers the
+        // whole pipeline from CSR to final positions.
+        const t0 = performance.now();
+        const hierarchyReply = awaitReply(worker, 'hierarchy', graph.id);
+        worker.postMessage({ type: 'hierarchy', id: graph.id } satisfies ToWorker);
+        const { levels } = await hierarchyReply;
+        if (disposed) return;
+        const gpuTarget =
+          renderer.backend === 'webgpu' ? renderer.positionsGpuBuffer?.() ?? null : null;
+        const positions = await multilevelLayout(levels as HierarchyLevelBuffers[], {
+          seed,
+          device: renderer.device,
+          onProgress: (p) => {
+            if (disposed) return false;
+            setLayout(`level ${p.level}/${p.levels} · iter ${p.iter}/${p.iters}`);
+            return true;
+          },
+          onPositions: (current, nodeCount) => {
+            // Live preview only once the sim reaches the full-resolution level.
+            if (nodeCount !== graph.nodeCount || !renderer) return;
+            if (current instanceof GpuLevelSim && gpuTarget) {
+              current.copyInto(gpuTarget);
+            } else if (current instanceof Float32Array) {
+              renderer.updatePositions(current);
+            }
+          },
+        });
+        if (disposed || !positions) return;
+        const ms = Math.round(performance.now() - t0);
+        stats.layoutMs = ms;
+        finishWith(positions, `ready in ${(ms / 1000).toFixed(1)} s`);
+        worker.postMessage(
+          { type: 'save-positions', id: graph.id, seed, positions } satisfies ToWorker,
+        );
+      }
+
       return () => {
         observer.disconnect();
         canvas.removeEventListener('pointerdown', onPointerDown);
         canvas.removeEventListener('pointermove', onPointerMove);
         canvas.removeEventListener('pointerup', onPointerUp);
         canvas.removeEventListener('wheel', onWheel);
-        renderer.dispose();
+        renderer!.dispose();
       };
     };
 
@@ -195,7 +295,7 @@ export function GraphView({ graph, name, onClose }: {
       delete window.__skeinRender;
       cleanup.then((fn) => fn?.());
     };
-  }, [graph]);
+  }, [graph, seed, worker]);
 
   return (
     <div className="graph-view" data-testid="graph-view">
@@ -207,7 +307,25 @@ export function GraphView({ graph, name, onClose }: {
             ` (drawing a seeded ${EDGE_DRAW_CAP.toLocaleString()}-edge sample)`}
         </span>
         <span data-testid="render-backend">renderer: {backend}</span>
-        <span>seed: {POSITION_SEED} (layout lands in M3)</span>
+        <span data-testid="layout-status">layout: {layoutState}</span>
+        <label>
+          seed{' '}
+          <input
+            className="seed-input"
+            value={seedInput}
+            onChange={(e) => setSeedInput(e.target.value)}
+            size={6}
+            aria-label="layout seed"
+          />
+        </label>
+        <button
+          onClick={() => {
+            const s = Number(seedInput);
+            if (Number.isFinite(s)) setSeed(s >>> 0);
+          }}
+        >
+          re-layout
+        </button>
         <span data-testid="render-fps">{fps} fps</span>
         <button onClick={onClose}>close</button>
       </div>

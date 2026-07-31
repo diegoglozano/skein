@@ -103,11 +103,12 @@ export function App() {
     workerRef.current?.postMessage({ type: 'load', id } satisfies ToWorker);
   }, []);
 
-  if (viewing) {
+  if (viewing && workerRef.current) {
     return (
       <GraphView
         graph={viewing.graph}
         name={viewing.name}
+        worker={workerRef.current}
         onClose={() => setViewing(null)}
       />
     );

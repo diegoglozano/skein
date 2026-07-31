@@ -18,6 +18,7 @@ import type { GraphSummary } from './protocol';
 
 export const CSR_MAGIC = 0x534b_4331; // "SKC1"
 export const DICT_MAGIC = 0x534b_4431; // "SKD1"
+export const POS_MAGIC = 0x534b_5031; // "SKP1"
 
 export interface GraphBuffers {
   offsets: Uint32Array;
@@ -81,6 +82,38 @@ export async function writeManifest(id: string, summary: GraphSummary): Promise<
   await writeFile(dir, 'manifest.json', [new TextEncoder().encode(JSON.stringify(summary))]);
 }
 
+// Layout positions are persisted per seed (§6: the seed is part of the
+// picture's identity): positions-<seed>.bin = [SKP1, nodeCount, seed, 0] + xy.
+export async function savePositions(
+  id: string,
+  seed: number,
+  positions: Float32Array,
+): Promise<void> {
+  const dir = await (await graphsDir()).getDirectoryHandle(id, { create: true });
+  const header = new Uint32Array([POS_MAGIC, positions.length / 2, seed >>> 0, 0]);
+  await writeFile(dir, `positions-${seed >>> 0}.bin`, [header, positions]);
+}
+
+export async function loadPositions(id: string, seed: number): Promise<Float32Array | null> {
+  try {
+    const dir = await (await graphsDir()).getDirectoryHandle(id);
+    const handle = await dir.getFileHandle(`positions-${seed >>> 0}.bin`);
+    const access = await handle.createSyncAccessHandle();
+    try {
+      const header = new Uint32Array(4);
+      access.read(header, { at: 0 });
+      if (header[0] !== POS_MAGIC || header[2] !== seed >>> 0) return null;
+      const positions = new Float32Array(2 * header[1]);
+      access.read(positions, { at: 16 });
+      return positions;
+    } finally {
+      access.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 export async function listGraphs(): Promise<GraphSummary[]> {
   const dir = await graphsDir();
   const graphs: GraphSummary[] = [];
@@ -96,6 +129,27 @@ export async function listGraphs(): Promise<GraphSummary[]> {
   }
   graphs.sort((a, b) => b.importedAt.localeCompare(a.importedAt));
   return graphs;
+}
+
+/** Bulk-read the persisted directed CSR (offsets + targets) for layout. */
+export async function loadGraphCsr(
+  id: string,
+): Promise<{ nodeCount: number; edgeCount: number; offsets: Uint32Array; targets: Uint32Array }> {
+  const dir = await (await graphsDir()).getDirectoryHandle(id);
+  const access = await (await dir.getFileHandle('csr.bin')).createSyncAccessHandle();
+  try {
+    const header = new Uint32Array(4);
+    access.read(header, { at: 0 });
+    const [magic, n, m] = header;
+    if (magic !== CSR_MAGIC) throw new Error(`bad csr.bin magic for ${id}`);
+    const offsets = new Uint32Array(n + 1);
+    access.read(offsets, { at: 16 });
+    const targets = new Uint32Array(m);
+    access.read(targets, { at: 16 + 4 * (n + 1) });
+    return { nodeCount: n, edgeCount: m, offsets, targets };
+  } finally {
+    access.close();
+  }
 }
 
 /**

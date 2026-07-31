@@ -29,8 +29,17 @@ export type Backend = 'webgpu' | 'webgl2';
 
 export interface Renderer {
   readonly backend: Backend;
+  /** WebGPU only: the device, for compute passes sharing this context. */
+  readonly device?: GPUDevice;
   /** Upload graph buffers; may be called again to swap graphs. */
   setGraph(graph: RenderGraph): void;
+  /** Re-upload node positions (CPU-side layout path). */
+  updatePositions(positions: Float32Array): void;
+  /**
+   * WebGPU only: the live positions storage buffer, so a compute sim on the
+   * same device can copyBufferToBuffer into it without a CPU round trip.
+   */
+  positionsGpuBuffer?(): GPUBuffer | null;
   /**
    * Draw one frame. `edgeLimit` caps how many edges are drawn (a prefix of
    * the uploaded endpoint buffer — pre-shuffle it with a seeded permutation

@@ -95,21 +95,27 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
   let nodeCount = 0;
   let edgeCount = 0;
 
+  const uploadPositions = (positions: Float32Array) => {
+    const rows = Math.max(1, Math.ceil(nodeCount / TEX_W));
+    const padded = new Float32Array(TEX_W * rows * 2);
+    padded.set(positions);
+    gl.bindTexture(gl.TEXTURE_2D, positionTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, TEX_W, rows, 0, gl.RG, gl.FLOAT, padded);
+  };
+
   return {
     backend: 'webgl2',
+
+    updatePositions(positions: Float32Array) {
+      uploadPositions(positions);
+    },
 
     setGraph(graph: RenderGraph) {
       nodeCount = graph.nodeCount;
       edgeCount = graph.edgeCount;
-
-      // Pad positions into a TEX_W-wide RG32F texture.
-      const rows = Math.max(1, Math.ceil(nodeCount / TEX_W));
-      const padded = new Float32Array(TEX_W * rows * 2);
-      padded.set(graph.positions);
-      gl.bindTexture(gl.TEXTURE_2D, positionTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, TEX_W, rows, 0, gl.RG, gl.FLOAT, padded);
+      uploadPositions(graph.positions);
 
       gl.bindVertexArray(edgeVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, endpointBuf);

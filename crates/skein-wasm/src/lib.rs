@@ -6,6 +6,53 @@
 use skein_core::{EdgeIngest, IngestConfig};
 use wasm_bindgen::prelude::*;
 
+/// Build the multilevel layout hierarchy (§6) from a persisted directed CSR.
+/// Returns an Array of per-level objects
+/// `{ offsets, targets, weights, parentMap }` — level 0 is the symmetrized
+/// input graph, `parentMap` maps each level's nodes into the next (absent on
+/// the coarsest level). All buffers are freshly-allocated typed arrays, safe
+/// to transfer.
+#[wasm_bindgen]
+pub fn build_layout_hierarchy(
+    offsets: &[u32],
+    targets: &[u32],
+    target_nodes: u32,
+    max_levels: u32,
+) -> js_sys::Array {
+    let csr = skein_core::Csr {
+        offsets: offsets.to_vec(),
+        targets: targets.to_vec(),
+        weights: None,
+    };
+    let levels = skein_core::build_hierarchy(&csr, target_nodes, max_levels as usize);
+
+    let out = js_sys::Array::new();
+    for level in &levels {
+        let obj = js_sys::Object::new();
+        let set = |k: &str, v: &JsValue| {
+            js_sys::Reflect::set(&obj, &JsValue::from_str(k), v).unwrap();
+        };
+        set(
+            "offsets",
+            &js_sys::Uint32Array::from(&level.graph.offsets[..]),
+        );
+        set(
+            "targets",
+            &js_sys::Uint32Array::from(&level.graph.targets[..]),
+        );
+        let weights = level.graph.weights.as_deref().unwrap_or(&[]);
+        set("weights", &js_sys::Float32Array::from(weights));
+        if !level.parent_map.is_empty() {
+            set(
+                "parentMap",
+                &js_sys::Uint32Array::from(&level.parent_map[..]),
+            );
+        }
+        out.push(&obj);
+    }
+    out
+}
+
 /// Ingest session: stream CSV chunks in, get flat typed arrays out
 /// (REQUIREMENTS.md §4.1–4.2). The ingest worker feeds `File.stream()` chunks
 /// via `push_chunk`; nothing is returned per-chunk to keep the boundary
