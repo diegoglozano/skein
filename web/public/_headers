@@ -1,0 +1,8 @@
+# Cloudflare Pages headers (DECISIONS.md D6).
+# COOP/COEP enable SharedArrayBuffer (REQUIREMENTS.md §8); the CSP mirrors the
+# build-time meta tag as defence in depth (§7, D1).
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'
+  X-Content-Type-Options: nosniff

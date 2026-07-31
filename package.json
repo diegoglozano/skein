@@ -1,0 +1,14 @@
+{
+  "name": "skein-monorepo",
+  "private": true,
+  "workspaces": [
+    "web",
+    "tests"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w web",
+    "build": "npm run build -w web",
+    "fixtures": "node bench/generate-fixtures.mjs",
+    "test:e2e": "npm run test -w tests"
+  }
+}

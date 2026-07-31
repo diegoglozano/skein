@@ -1,0 +1,8 @@
+{
+  "nodes": 1000000,
+  "edges": 10000000,
+  "intern_secs": 6.175,
+  "intern_meps": 3.2,
+  "csr_secs": 0.16,
+  "csr_meps": 62.5
+}

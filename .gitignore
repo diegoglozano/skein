@@ -1,0 +1,16 @@
+node_modules/
+dist/
+target/
+*.log
+
+# Generated fixtures are large — regenerate with bench/generate-fixtures.mjs
+bench/fixtures/
+web/public/fixtures/
+
+# Playwright output
+tests/test-results/
+tests/playwright-report/
+
+# Bench results are committed deliberately, per-run scratch is not
+bench/results/*.tmp
+*.tsbuildinfo
