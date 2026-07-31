@@ -1,0 +1,66 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #0b0b12;
+  color: #e6e6ea;
+}
+
+.shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  letter-spacing: 0.04em;
+}
+
+.privacy-badge {
+  border: 1px solid #2e7d4f;
+  color: #7fd4a3;
+  background: transparent;
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.verify {
+  border-left: 3px solid #2e7d4f;
+  padding: 0.25rem 1rem;
+  margin: 1rem 0;
+  background: #11131c;
+}
+
+.verify h2 {
+  font-size: 1rem;
+}
+
+.dropzone {
+  margin-top: 2rem;
+  border: 2px dashed #3a3f55;
+  border-radius: 12px;
+  padding: 4rem 2rem;
+  text-align: center;
+}
+
+.dropzone .muted {
+  color: #8a8fa3;
+  font-size: 0.85rem;
+}
+
+.dropzone a {
+  color: #9fb6ff;
+}
