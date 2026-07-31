@@ -257,6 +257,15 @@ every artifact after the package: the installer users curl is
 commented out — the tap push needs a `HOMEBREW_TAP_TOKEN` secret this repo does
 not have, and enabling it before the secret exists would fail the release job.
 
+The v0.1.0 tag failed on all six targets with "profile `dist` is not defined":
+`dist-workspace.toml` was hand-written rather than produced by `dist init`, and
+`dist init`'s other side effect is adding `[profile.dist]` to the root
+`Cargo.toml`. dist always builds `--profile dist`, so the omission breaks every
+release build while leaving normal `cargo build` and the whole test suite green
+— nothing in CI covers the release path. The lesson is in the README: dry-run
+`dist build --artifacts=local/global` before tagging, which reproduces the
+failure locally in a minute.
+
 **Self-hosting is the same binary in a container** (`Dockerfile`, multi-stage:
 node+rust builder → debian-slim runtime, non-root). The caveat that matters:
 WebGPU and SharedArrayBuffer require a secure context, so an instance reached

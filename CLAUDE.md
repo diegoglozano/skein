@@ -2,7 +2,7 @@
 
 Orientation for a fresh session. Read REQUIREMENTS.md top to bottom before
 writing code — it is the brief. docs/DECISIONS.md records resolved design
-questions (D1–D11); don't relitigate them without new evidence.
+questions (D1–D12); don't relitigate them without new evidence.
 
 ## Roadmap and current status
 
@@ -136,6 +136,7 @@ cargo run -p skein -- --web-root web/dist        # the shippable binary (D10)
 cargo run --release --example bench | node bench/compare-bench.mjs   # ratio gate
 cargo run --release --example layout_tune    # force-param calibration (separation metrics)
 node tests/manual-explore.mjs medium.csv     # M4 pick/search/neighbour timings (headed, preview on :4173)
+node tests/manual-demo.mjs clustered.csv     # re-record the README GIF (headed; ffmpeg)
 ```
 
 In managed/remote environments, point Playwright at the pre-installed browser:

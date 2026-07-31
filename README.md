@@ -4,6 +4,13 @@ A fully client-side, open source viewer for large network graphs. Upload an
 edge list, get an interactive force-directed layout. Your data never leaves
 the tab — enforced by CSP and an automated no-network test, not by promise.
 
+![skein: dropping a CSV edge list, the multilevel layout separating planted
+communities, then pan and zoom](docs/demo.gif)
+
+Unedited screen capture: a 20k-node / 120k-edge edge list ingested in 31 ms,
+laid out in 1.9 s, and panned and zoomed at 60 fps — on the reference M3
+MacBook Air, WebGPU on Metal. Recorded by `node tests/manual-demo.mjs`.
+
 **Status: M3 done, plus distribution.** Ingest, rendering, and deterministic
 multilevel layout all land at the 1M-node / 10M-edge tier, and the app ships as
 a single binary. M4 (attributes, filters, search) is next. See
@@ -207,10 +214,31 @@ instead.
 `tests/tune-layout.mjs` is the fast CPU calibration harness for force parameters —
 use it before touching them; it prints cluster-separation metrics without a GPU.
 
+`tests/manual-demo.mjs` re-records the GIF at the top of this file, driving the
+same preview server headed so the capture shows the real WebGPU path. It needs
+`ffmpeg`, and uses `gifsicle` if present for a lossy pass that costs little
+visible quality and about a third of the file size:
+
+```sh
+node tests/manual-demo.mjs clustered.csv   # → docs/demo.gif
+```
+
 ## Releasing
 
-Packaging is [dist], configured in `dist-workspace.toml`. Bump the version in
-`crates/skein-cli/Cargo.toml`, then tag and push:
+Packaging is [dist], configured in `dist-workspace.toml` plus `[profile.dist]`
+in the root `Cargo.toml` — dist always builds `--profile dist`, so removing that
+section breaks every release build.
+
+Dry-run the exact command CI runs before tagging; it catches config mistakes in
+a minute instead of six failed jobs:
+
+```sh
+npm run build                                          # dist does not do this for you
+dist build --tag=v0.1.0 --artifacts=local --target=aarch64-apple-darwin
+dist build --tag=v0.1.0 --artifacts=global             # the installers
+```
+
+Then bump the version in `crates/skein-cli/Cargo.toml`, tag, and push:
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
@@ -220,6 +248,10 @@ git tag v0.1.0 && git push origin v0.1.0
 `.github/workflows/build-setup.yml` so the binary actually contains the app, and
 creates the GitHub Release with the installers attached. After changing
 `dist-workspace.toml`, run `dist generate` and commit the regenerated workflow.
+
+If a release fails before the `host` job, no GitHub Release is created and the
+tag can be reused: `git push origin :refs/tags/vX.Y.Z`, delete it locally, fix,
+and re-tag.
 
 ## License
 
