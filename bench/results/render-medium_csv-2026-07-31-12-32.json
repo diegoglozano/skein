@@ -1,0 +1,15 @@
+{
+  "fixture": "medium.csv",
+  "backend": "webgpu",
+  "adapterInfo": "apple metal-3",
+  "nodes": 1000000,
+  "edges": 10000000,
+  "fpsSamples": [
+    2.2,
+    1.4,
+    3.1
+  ],
+  "fpsMin": 1.4,
+  "fpsMedian": 2.2,
+  "usedJSHeapMB": 80
+}

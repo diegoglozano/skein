@@ -134,3 +134,55 @@ h1 {
   font-style: normal;
   font-size: 0.85rem;
 }
+
+.summary button {
+  margin-top: 0.5rem;
+  border: 1px solid #3a3f55;
+  background: transparent;
+  color: #9fb6ff;
+  border-radius: 8px;
+  padding: 0.35rem 1rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.graph-view {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #0b0b12;
+}
+
+.graph-hud {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  color: #8a8fa3;
+  border-bottom: 1px solid #1c1f2e;
+  flex-wrap: wrap;
+}
+
+.graph-hud strong {
+  color: #e6e6ea;
+}
+
+.graph-hud button {
+  margin-left: auto;
+  border: 1px solid #3a3f55;
+  background: transparent;
+  color: #9fb6ff;
+  border-radius: 6px;
+  padding: 0.2rem 0.8rem;
+  cursor: pointer;
+}
+
+.graph-view canvas {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  touch-action: none;
+  cursor: grab;
+}

@@ -38,7 +38,18 @@ export interface GraphSummary {
 export type ToWorker =
   | { type: 'ingest'; file: File; options: IngestOptions }
   | { type: 'list' }
-  | { type: 'verify'; id: string };
+  | { type: 'verify'; id: string }
+  | { type: 'load'; id: string };
+
+/** Flat render-ready buffers (§4.2); positions come from layout (M3) or a
+ * deterministic seed until then. Transferred, not copied. */
+export interface LoadedGraph {
+  id: string;
+  nodeCount: number;
+  edgeCount: number;
+  /** Endpoint node indices, interleaved [s0, t0, s1, t1, ...], length 2m. */
+  endpoints: Uint32Array;
+}
 
 export type FromWorker =
   | {
@@ -52,4 +63,5 @@ export type FromWorker =
   | { type: 'done'; graph: GraphSummary }
   | { type: 'graphs'; graphs: GraphSummary[] }
   | { type: 'verified'; id: string; ok: boolean; detail: string }
+  | { type: 'loaded'; graph: LoadedGraph }
   | { type: 'error'; message: string };

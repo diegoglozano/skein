@@ -2,7 +2,7 @@
 
 Orientation for a fresh session. Read REQUIREMENTS.md top to bottom before
 writing code — it is the brief. docs/DECISIONS.md records resolved design
-questions (D1–D7); don't relitigate them without new evidence.
+questions (D1–D8); don't relitigate them without new evidence.
 
 ## Roadmap and current status
 
@@ -34,13 +34,23 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   refresh). The privacy gate now runs the full ingest pipeline under load.
   `npm run build:wasm` (wasm-pack) is required before dev/build; CI installs
   it via taiki-e/install-action.
-- **M2 — next up:** our own render path per D7 (instanced nodes + edge
-  segments from flat buffers, WebGPU with WebGL2 fallback), driven by
-  precomputed coordinates at 1M/10M. Buffers come back from the worker via
-  transfer — the protocol deliberately keeps them in the worker until M2
-  defines what the render path needs.
-- **M3–M5:** not started; see §11. M2/M3 are our own renderer + multilevel
-  GPU layout per D7, not cosmos.gl integration.
+- **M2 — done (2026-07-31).** Own render path per D7: WebGPU renderer
+  (vertex pulling from storage buffers, instanced node quads + line-list
+  edges) with a WebGL2 fallback sharing the same flat buffers (positions in
+  an RG32F texture, endpoints as uint attributes); pan/zoom camera
+  (`web/src/render/`); `GraphView` with backend/fps HUD and deterministic
+  seeded positions until M3. Worker `load` message expands CSR from OPFS to
+  interleaved endpoint pairs and transfers them. Edge drawing is fill-bound
+  (D8): a seeded-permutation sample capped at 300k edges is drawn, HUD says
+  so. Real-hardware gate passed (`bench/results/render-medium_csv-*.json`):
+  1M/10M on WebGPU/Metal at min 40.6 / median 56.9 fps during scripted
+  pan/zoom, ~81 MB JS heap. Harness: `tests/manual-render.mjs`.
+- **M3 — next up:** multilevel layout per §6 — label-propagation coarsening
+  in `skein-core`, WebGPU compute force sim with uniform-grid repulsion,
+  fixed-order accumulation (D2: no atomics), prolongate + refine.
+  Prototype the grid-repulsion kernel against WebGPU buffer/workgroup limits
+  early. Real layouts shorten edges — revisit the D8 edge cap then.
+- **M4–M5:** not started; see §11.
 
 M0 facts worth keeping: headless Chromium falls back to SwiftShader even on
 GPU machines — real-hardware runs must be headed; cosmos.gl 3.4 is luma.gl 9
