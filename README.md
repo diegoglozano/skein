@@ -4,9 +4,10 @@ A fully client-side, open source viewer for large network graphs. Upload an
 edge list, get an interactive force-directed layout. Your data never leaves
 the tab — enforced by CSP and an automated no-network test, not by promise.
 
-**Status: M3 done** — ingest, rendering, and deterministic multilevel layout all
-land at the 1M-node / 10M-edge tier. M4 (attributes, filters, search) is next.
-See [REQUIREMENTS.md](REQUIREMENTS.md) for the full brief and
+**Status: M3 done, plus distribution.** Ingest, rendering, and deterministic
+multilevel layout all land at the 1M-node / 10M-edge tier, and the app ships as
+a single binary. M4 (attributes, filters, search) is next. See
+[REQUIREMENTS.md](REQUIREMENTS.md) for the full brief and
 [docs/DECISIONS.md](docs/DECISIONS.md) for resolved design questions.
 
 ## Install
@@ -28,14 +29,17 @@ Both place the binary in `$CARGO_HOME/bin` (`~/.cargo/bin` by default).
 
 `cargo install skein` is **not** supported: the web bundle is built by npm and
 baked into the binary at compile time, so a crates.io source build would produce
-a binary with no app inside it (docs/DECISIONS.md D10). To build from a checkout:
+a binary with no app inside it (docs/DECISIONS.md D10). To build from a checkout
+you need Node, the Rust toolchain, and [wasm-pack]:
 
 ```sh
-npm install && npm run build    # must precede the cargo build
-cargo build --release -p skein  # ./target/release/skein
+cargo install wasm-pack           # once; the web build compiles skein-wasm
+npm install && npm run build      # must precede the cargo build
+cargo build --release -p skein    # ./target/release/skein
 ```
 
 [dist]: https://opensource.axo.dev/cargo-dist/
+[wasm-pack]: https://rustwasm.github.io/wasm-pack/
 
 ## Run it
 
@@ -44,10 +48,35 @@ serves it to your own browser — there is no server, and nothing is uploaded.
 
 ```sh
 skein            # serves http://127.0.0.1:7373 and opens a browser
+skein --help     # --host, --port, --web-root, --fixtures, --no-open, --threads
 ```
 
 The port is fixed on purpose — graphs you ingest are stored in the browser per
 origin, and the origin includes the port, so a different port hides them.
+
+### What to feed it
+
+Drop a **CSV edge list** on the page (or use the file picker). Today the column
+mapping is fixed: a header row is expected and skipped, the first column is the
+source node, the second is the target. Anything further right is ignored, and
+rows with fewer than two columns are skipped and counted in the summary.
+
+```csv
+source,target
+alice,bob
+alice,carol
+```
+
+IDs are arbitrary strings; they're interned, so numeric and textual IDs both
+work. The graph is parsed to CSR and persisted to OPFS in your browser, which is
+why it shows up in the recent-graphs list on the next visit — and why clearing
+site data for the origin deletes it.
+
+Current limits, all deliberate and all on the roadmap: CSV only (Parquet/Arrow
+and a column-mapping dialog are §10), no attributes, search, or filters until M4
+(§11), and the canvas draws a seeded 300k-edge sample of larger graphs because
+edge rendering is fill-bound (docs/DECISIONS.md D8) — the HUD says when it is
+sampling.
 
 ### Self-hosting
 
@@ -68,44 +97,115 @@ To include a downloadable sample graph at `/fixtures/`, pass a preset from
 docker build --build-arg SAMPLE_FIXTURE=small -t skein .
 ```
 
-## Layout
+## Performance
+
+Measured 2026-07-31 on the reference laptop (M3 MacBook Air, headed Chromium,
+WebGPU on Metal) — real hardware, because headless CI runs on SwiftShader and its
+numbers mean nothing here (docs/DECISIONS.md D3, D5). Raw JSON and screenshots
+are in `bench/results/`.
+
+| 1M nodes / 10M edges (152 MB CSV) | measured | §9 budget |
+|---|---|---|
+| Ingest — parse, CSR, persist to OPFS | 2.0 s | < 60 s |
+| Layout — hierarchy + GPU force sim | 10.9 s | < 45 s |
+| Pan/zoom after layout | 56 fps min | ≥ 30 fps |
+
+A clustered 20k/120k graph lays out in 1.9 s at a steady 60 fps with planted
+communities visibly separated — the qualitative gate for layout quality.
+
+Same file + same seed + same machine + same browser produces the same picture;
+that determinism is end-to-end tested across fresh browser contexts
+(`tests/layout.spec.ts`), and scoped to a machine on purpose (D2).
+
+## Repo layout
 
 ```
-crates/skein-core/   Rust: ID interning, CSR, coarsening — tested natively
-crates/skein-wasm/   wasm-bindgen boundary
+crates/skein-core/   Rust: ID interning, CSV scanner, CSR, coarsening — tested natively
+crates/skein-wasm/   wasm-bindgen boundary (thin; algorithms stay in core)
 crates/skein-cli/    the `skein` binary: embeds web/dist and serves it
-web/                 React + Vite app; spike.html is the M0 renderer spike
-bench/               fixture generator, native micro-benchmarks, results
-tests/               Playwright: the no-network privacy gate + spike runner
+web/src/workers/     ingest worker: File.stream() → WASM → CSR + OPFS
+web/src/render/      WebGPU renderer with a WebGL2 fallback, shared flat buffers
+web/src/layout/      multilevel force sim: WGSL compute, plus a CPU reference
+web/src/ui/          React shell: drop zone, recent graphs, GraphView + HUD
+bench/               fixture generator, native micro-benchmarks, dated results
+tests/               Playwright specs and the manual real-hardware harnesses
 ```
+
+`web/spike.html` is the M0 renderer spike, kept for reproducibility.
 
 ## Develop
 
+wasm-pack is required — `npm run dev` and `npm run build` both compile
+`skein-wasm` into `web/src/wasm-pkg` first, and the app will not start without it.
+
 ```sh
+cargo install wasm-pack     # once
 npm install                 # web + tests workspaces
-cargo test --workspace      # core data structures
-npm run fixtures            # generate tiny + small synthetic graphs
+npm run fixtures            # generate tiny + small synthetic graphs (gitignored)
 npm run dev                 # app at :5173, spike at /spike.html?fixture=tiny
 ```
 
-## M0 spike
+Before pushing:
 
 ```sh
-node bench/generate-fixtures.mjs medium     # 1M nodes / 10M edges (~30s, ~200MB)
-npm run build -w web
-SPIKE_FIXTURE=medium npm run spike -w tests # writes bench/results/spike-*.json
+cargo test --workspace
+cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
+npm run build               # typecheck + production build (CSP injected here)
+npm run test -w tests       # Playwright; needs fixtures + the build above
 ```
 
-The wrap-vs-build pass criteria are in docs/DECISIONS.md D3. Only runs on real
-hardware count — headless CI uses SwiftShader (software GL).
+The Playwright suite runs four projects: `privacy` (the no-network gate against
+the production build), `app` (ingest and layout determinism), `spike` (the M0
+measurement, against the dev server), and `cli` (the same privacy gate against
+the `skein` binary, which is a second deployment path with its own headers).
+The `cli` project builds the binary, so a cold run is slow.
+
+Fixtures live in `bench/fixtures/` and are served at `/fixtures/*` by a Vite
+plugin — they are generated, never committed, and must not move into
+`web/public/`.
+
+In managed or remote environments, point Playwright at the pre-installed browser
+with `CHROMIUM_PATH`, set to whatever `ls /opt/pw-browsers` reports — e.g.
+`CHROMIUM_PATH=/opt/pw-browsers/chromium-1194/chrome-linux/chrome`. That
+Chromium is software-rendered (SwiftShader), so functional runs are fine there
+but performance verdicts are not.
 
 ## Benchmarks
+
+Native micro-benchmarks, compared as ratios so they survive machine differences:
 
 ```sh
 cargo run --release --example bench | node bench/compare-bench.mjs
 ```
 
-CI fails on a >20% regression against `bench/baselines/native-bench.json`.
+It flags a >20% regression against `bench/baselines/native-bench.json`. CI runs
+it `--warn-only` for now: the committed baseline is machine-class specific and
+has not been regenerated on the CI runner class, so a hard failure there would
+mostly measure the runner. Refresh the baseline only deliberately, with
+`--update` (D5).
+
+Anything about frames or GPU time has to come from real hardware, via the manual
+harnesses in `tests/` — each writes a dated JSON (plus a screenshot where it
+helps) into `bench/results/`. They drive an already-running server rather than
+starting one, and the render and layout harnesses launch **headed** on purpose:
+
+```sh
+node bench/generate-fixtures.mjs medium clustered   # medium is 1M/10M, ~30 s
+npm run build
+npm run preview -w web -- --port 4173 --strictPort  # leave running
+
+node tests/manual-ingest.mjs medium.csv     # ingest stage timings
+node tests/manual-render.mjs medium.csv     # fps under scripted pan/zoom
+node tests/manual-layout.mjs medium.csv     # layout wall time + post-layout fps
+```
+
+`manual-layout.mjs` defaults to `clustered.csv`, the 20k/120k planted-community
+fixture used as the visual quality gate. The M0 cosmos.gl comparison (D3) is
+`node tests/manual-spike.mjs medium`, which wants the dev server on :5173
+instead.
+
+`tests/tune-layout.mjs` is the fast CPU calibration harness for force parameters —
+use it before touching them; it prints cluster-separation metrics without a GPU.
 
 ## Releasing
 
