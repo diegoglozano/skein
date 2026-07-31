@@ -203,3 +203,59 @@ hairball cores (cell-aggregate repulsion can't resolve sub-cell structure —
 candidate fixes: exact pairwise within own cell, or jittered grid origins
 per iteration at the cost of determinism bookkeeping); the D8 edge-draw cap
 stays at 300k though post-layout fps headroom (min 56) suggests it can rise.
+
+## D10 — Distribution: a binary that serves the app to a real browser, not a webview
+
+skein is a browser app and §11's M5 ships it as a static deploy. That leaves two
+gaps: people who want to run it locally without trusting *any* host, and people
+who want to self-host an instance. Both want an artifact you can download and
+run. Three shapes were considered.
+
+**Rejected — a desktop app (Tauri/Electron-style).** Tauri renders in the
+*system* webview: WebView2 (Chromium) on Windows, WKWebView on macOS, WebKitGTK
+on Linux. WebGPU is enabled by default in the first two but is not implemented
+in WebKitGTK at all. The renderer (D7/D8) and the force sim (D9) are WebGPU
+compute; on Linux the desktop app would silently fall back to the WebGL2 path
+and the CPU sim — exactly the tier we rejected cosmos.gl for. Shipping a
+"native app" that is slower than the same machine's Chrome is the wrong trade,
+and the failure is invisible to the user. Electron avoids this by bundling
+Chromium, at ~150 MB and a second browser engine to keep patched.
+
+**Chosen — a static binary that serves the app over loopback.** `skein` embeds
+`web/dist` (build.rs → `include_bytes!`) and serves it with tiny_http, then
+opens the user's real browser. The browser is whatever they already trust and
+keep updated, so WebGPU support is theirs, not ours. Privacy (§7) is unchanged:
+same-origin only, and the binary is now covered by the no-network gate as its
+own Playwright project, because it is a second deployment path with its own
+header handling.
+
+The server is a deliberate ~200 lines rather than a static-file crate, because
+the app needs headers a generic file server won't set: COOP/COEP for
+SharedArrayBuffer (§8) and the D1 CSP. Both fail *quietly* — the app loads and
+degrades. The CSP now lives in three places (Vite's meta tag, `web/public/_headers`,
+`server.rs`); a unit test reads `_headers` and fails on drift.
+
+**Port 7373 is fixed, not ephemeral.** OPFS is keyed by origin and the origin
+includes the port, so picking a free port per launch would orphan every graph
+the user had ingested. A busy port is an error with an explanation, not a
+silent fallback.
+
+**Packaging is cargo-dist** (`dist`, v0.32.0): prebuilt archives plus shell and
+PowerShell installers for macOS/Linux/Windows, x86_64 and aarch64. The one piece
+of glue is `github-build-setup`: cargo knows nothing about wasm-pack or Vite, so
+without a pre-build hook `dist` would cheerfully ship a binary with no app
+inside it. It runs the web build on each target runner (~1 min against several
+minutes of Rust) and then asserts `web/dist/index.html` exists. `cargo install`
+is *not* a supported path for the same reason — crates.io would get a source
+package with no bundle.
+
+**Self-hosting is the same binary in a container** (`Dockerfile`, multi-stage:
+node+rust builder → debian-slim runtime, non-root). The caveat that matters:
+WebGPU and SharedArrayBuffer require a secure context, so an instance reached
+over plain HTTP at a LAN address degrades exactly the way the rejected desktop
+app would. Self-hosted deployments must terminate TLS.
+
+**Revisit if:** WebKitGTK ships WebGPU (a Tauri build becomes a real option and
+would drop the artifact to ~10 MB with an OS-native file picker); or the wasm
+bundle grows past what is comfortable to embed, at which point the assets move
+beside the binary rather than inside it.
