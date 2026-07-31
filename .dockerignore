@@ -1,0 +1,15 @@
+# Everything here is regenerated inside the image. Copying it in would bloat
+# the build context and, worse, let a stale local web/dist or fixture set end
+# up baked into the binary.
+.git
+target/
+node_modules/
+web/node_modules/
+tests/node_modules/
+web/dist/
+web/src/wasm-pkg/
+bench/fixtures/
+bench/results/
+tests/test-results/
+tests/playwright-report/
+*.log

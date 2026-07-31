@@ -1,5 +1,5 @@
 //! Layout calibration harness — the fast loop for force-parameter work
-//! (DECISIONS.md D9/D10). Generates the `clustered` fixture's planted-partition
+//! (DECISIONS.md D9/D11). Generates the `clustered` fixture's planted-partition
 //! graph natively (same xorshift64* generator as `bench/generate-fixtures.mjs`,
 //! so the graph is identical), runs the CPU sim at several parameter combos and
 //! prints separation metrics: a correct layout keeps the planted communities
@@ -179,7 +179,7 @@ fn main() {
         );
     }
 
-    // Single-level cost vs node count — informs the no-WebGPU cap (D10).
+    // Single-level cost vs node count — informs the no-WebGPU cap (D11).
     println!("\nsingle-level timings (native; WASM in-browser is the number that ships):");
     for n in [100_000usize, 250_000, 500_000] {
         let csr = uniform(n, 6);

@@ -1,4 +1,4 @@
-// The no-WebGPU layout tier (§8 graceful degradation, DECISIONS.md D10):
+// The no-WebGPU layout tier (§8 graceful degradation, DECISIONS.md D11):
 // with `navigator.gpu` removed the renderer falls back to WebGL2 and the whole
 // multilevel layout runs in WASM inside the ingest worker. It must still
 // finish, still preview, and still be deterministic — the same D2 guarantee as

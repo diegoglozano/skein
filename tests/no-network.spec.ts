@@ -52,7 +52,7 @@ test('app makes no off-origin requests', async ({ page, baseURL }) => {
   expect(all.length, 'expected at least the document + assets').toBeGreaterThan(0);
 });
 
-// The no-WebGPU tier runs the whole layout in WASM inside the worker (D10) —
+// The no-WebGPU tier runs the whole layout in WASM inside the worker (D11) —
 // a distinct code path, so the guarantee is checked there too.
 test('no off-origin requests on the WebGL2 fallback layout path', async ({ page, baseURL }) => {
   const origin = new URL(baseURL!).origin;

@@ -1,4 +1,4 @@
-// Real-hardware measurement of the no-WebGPU layout tier (DECISIONS.md D10):
+// Real-hardware measurement of the no-WebGPU layout tier (DECISIONS.md D11):
 // hide `navigator.gpu`, ingest a fixture, and time the WASM multilevel layout
 // running inside the ingest worker. Records per-level durations (scraped from
 // the layout status line) so the node cap can be set from numbers rather than

@@ -33,7 +33,7 @@ const HIERARCHY_TARGET_NODES = 10_000;
 const HIERARCHY_MAX_LEVELS = 12;
 /** Levels larger than this get prolongation only in the WASM tier — §8
  * graceful degradation past §9's top tier. Measured, not guessed: at 1M the
- * whole fallback layout is 23.9 s of the 45 s budget (DECISIONS.md D10). */
+ * whole fallback layout is 23.9 s of the 45 s budget (DECISIONS.md D11). */
 const WASM_MAX_SIM_NODES = 1_000_000;
 /** Iterations per WASM `step` call — the yield granularity for progress. */
 const LAYOUT_CHUNK_ITERS = 4;

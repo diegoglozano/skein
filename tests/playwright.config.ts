@@ -1,10 +1,14 @@
 import { defineConfig } from '@playwright/test';
 
-// Two servers: the privacy test runs against the production build (vite
+// Three servers: the privacy test runs against the production build (vite
 // preview, CSP injected); the spike runs against the dev server so fixture
-// iteration doesn't require rebuilds. Both serve /fixtures from bench/fixtures.
+// iteration doesn't require rebuilds; and the privacy test runs a second time
+// against the `skein` binary, which is a separate deployment path with its own
+// header handling and must hold the §7 guarantee on its own (D10).
+// All three serve /fixtures from bench/fixtures.
 const PREVIEW_PORT = 4173;
 const DEV_PORT = 5173;
+const CLI_PORT = 4273;
 
 // Managed environments pre-install a Chromium that may not match the pinned
 // @playwright/test revision; CHROMIUM_PATH overrides discovery.
@@ -41,6 +45,11 @@ export default defineConfig({
       testMatch: /spike\.spec\.ts/,
       use: { baseURL: `http://localhost:${DEV_PORT}` },
     },
+    {
+      name: 'cli',
+      testMatch: /no-network\.spec\.ts/,
+      use: { baseURL: `http://localhost:${CLI_PORT}` },
+    },
   ],
   webServer: [
     {
@@ -56,6 +65,17 @@ export default defineConfig({
       cwd: '..',
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,
+    },
+    {
+      // Embeds whatever is in web/dist at compile time, so `npm run build`
+      // must have run first. The generous timeout covers a cold cargo build.
+      command:
+        `cargo run --quiet --release -p skein-cli -- serve ` +
+        `--port ${CLI_PORT} --no-open --fixtures bench/fixtures`,
+      port: CLI_PORT,
+      cwd: '..',
+      reuseExistingServer: !process.env.CI,
+      timeout: 300_000,
     },
   ],
 });
