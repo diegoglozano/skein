@@ -36,6 +36,14 @@ export interface Renderer {
   /** Re-upload node positions (CPU-side layout path). */
   updatePositions(positions: Float32Array): void;
   /**
+   * Overlay a highlighted subset (M4 hover/selection). Drawn on top of the
+   * base passes in an accent colour and at a larger point size, so the base
+   * buffers stay untouched and unhighlighted frames cost nothing extra.
+   * `nodes` are node indices; `edges` are endpoint index pairs
+   * [s0, t0, s1, t1, ...]. Empty arrays clear the overlay.
+   */
+  setHighlight(nodes: Uint32Array, edges: Uint32Array): void;
+  /**
    * WebGPU only: the live positions storage buffer, so a compute sim on the
    * same device can copyBufferToBuffer into it without a CPU round trip.
    */

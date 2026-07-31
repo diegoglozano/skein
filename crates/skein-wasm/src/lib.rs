@@ -6,6 +6,34 @@
 use skein_core::{EdgeIngest, IngestConfig, MultilevelLayout, SimParams};
 use wasm_bindgen::prelude::*;
 
+/// Total degree (out + in) per node, for the explore sidebar (§10).
+#[wasm_bindgen]
+pub fn total_degrees(offsets: &[u32], targets: &[u32]) -> Vec<u32> {
+    skein_core::total_degrees(offsets, targets)
+}
+
+/// 1-hop neighbourhood of `node`, ignoring edge direction (§10 selection).
+/// Returns `{ neighbors, total }`: `neighbors` is capped at `cap` in ascending
+/// index order, `total` is the honest count before truncation.
+#[wasm_bindgen]
+pub fn node_neighbors(offsets: &[u32], targets: &[u32], node: u32, cap: usize) -> js_sys::Object {
+    let (list, total) = skein_core::neighbors(offsets, targets, node, cap);
+    let obj = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &obj,
+        &JsValue::from_str("neighbors"),
+        &js_sys::Uint32Array::from(&list[..]),
+    )
+    .unwrap();
+    js_sys::Reflect::set(
+        &obj,
+        &JsValue::from_str("total"),
+        &JsValue::from_f64(total as f64),
+    )
+    .unwrap();
+    obj
+}
+
 /// Build the multilevel layout hierarchy (§6) from a persisted directed CSR.
 /// Returns an Array of per-level objects
 /// `{ offsets, targets, weights, parentMap }` — level 0 is the symmetrized

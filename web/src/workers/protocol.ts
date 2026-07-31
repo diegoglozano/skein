@@ -50,7 +50,9 @@ export type ToWorker =
   /** Abandon an in-flight `layout` (view closed, or the seed changed). */
   | { type: 'cancel-layout' }
   | { type: 'save-positions'; id: string; seed: number; positions: Float32Array }
-  | { type: 'load-positions'; id: string; seed: number };
+  | { type: 'load-positions'; id: string; seed: number }
+  /** 1-hop neighbourhood of `node`, both edge directions (M4 selection). */
+  | { type: 'neighbors'; id: string; node: number };
 
 /** One level of the §6 multilevel hierarchy; level 0 is the symmetrized
  * input. `parentMap` is absent on the coarsest level. */
@@ -69,6 +71,12 @@ export interface LoadedGraph {
   edgeCount: number;
   /** Endpoint node indices, interleaved [s0, t0, s1, t1, ...], length 2m. */
   endpoints: Uint32Array;
+  /** Concatenated UTF-8 node ids; slice with `idOffsets` (§4.2 dictionary). */
+  idBytes: Uint8Array;
+  /** Length nodeCount + 1. */
+  idOffsets: Uint32Array;
+  /** Total degree (out + in) per node. */
+  degrees: Uint32Array;
 }
 
 export type FromWorker =
@@ -91,4 +99,9 @@ export type FromWorker =
   | { type: 'layout-done'; id: string; seed: number; positions: Float32Array }
   | { type: 'positions-saved'; id: string }
   | { type: 'positions'; id: string; seed: number; positions: Float32Array | null }
-  | { type: 'error'; message: string };
+  /** `neighbors` is deduped and capped for display; `total` is the true count. */
+  | { type: 'neighbors'; id: string; node: number; neighbors: Uint32Array; total: number }
+  /** `request` is the message that failed. Listeners must check it: the
+   * layout waiter and the ingest UI share this channel, and an untagged error
+   * from a click-rate query used to abort an in-flight layout. */
+  | { type: 'error'; message: string; request?: ToWorker['type'] };

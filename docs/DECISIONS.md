@@ -346,3 +346,110 @@ there would fire on every deliberate tuning commit.
 budget, so it moves with the machine); or a future tier needs the layout on the
 main thread, which would justify a second wasm instance and retiring the
 duplicated TS helpers.
+
+## D12 — Explore state stays on the main thread; neighbour queries go to the worker
+
+M4's interaction layer splits along one line: **what the cursor needs at frame
+rate lives on the main thread; what needs the full CSR lives in the worker.**
+
+**Main thread.** Hover hit-testing (`web/src/interact/pick.ts`, a uniform grid
+over the laid-out positions) and id search (`interact/search.ts`, a byte scan
+over the flat dictionary). These two are TypeScript, which is a deliberate and
+*narrow* exception to "algorithms live in `skein-core`": the WASM module is
+instantiated in the ingest worker, so main-thread code cannot call it, and
+routing a `pointermove` through `postMessage` would lag the cursor by a frame
+*and* stall entirely while the worker is running a fallback-tier layout. The
+alternative is a second wasm instance on the main thread — the same trade D11
+declined for the layout helpers. Everything stays flat typed arrays (§4.2); the
+pick grid is 8 bytes per node, built once when positions settle (two O(n)
+passes, too expensive to redo per preview tick, which is why picking only wakes
+up after the layout finishes).
+
+The exception covers *only* main-thread code. Anything running in the worker
+has WASM available and therefore belongs in `skein-core`: `neighbors` and
+`total_degrees` live in `crates/skein-core/src/explore.rs` with native tests,
+and the worker just moves buffers. The first draft of this change hand-rolled
+both in TypeScript inside the worker — the same mistake D11 corrected for
+`cpu.ts`, and it is worth naming so it is not made a third time.
+
+To pay for this the worker now transfers the dictionary (`idBytes`,
+`idOffsets`) and a `degrees` column with the graph. At 1M nodes that is 8 MB of
+fixed cost by construction (`4(n+1)` offsets + `4n` degrees) plus the id bytes
+themselves, which are dataset-dependent — ~8 MB for ids the width of
+`n0`–`n999999`. Against the ~81 MB JS heap measured in M2, and it buys the pick
+grid its input; the alternative is asking the worker for every id we draw.
+
+**Worker.** The 1-hop neighbourhood, because it needs `targets` (40 MB at 10M
+edges) which the main thread has no reason to hold. Selection is click-rate,
+so a round trip is cheap. The stored CSR is directed, so in-neighbours cost a
+full scan of `targets`; that beats keeping a **reverse CSR resident for a
+click-rate feature**. Dedup is a bitmap over node indices, not a hash set: a
+hub with a million neighbours costs n/8 bytes and no per-neighbour allocation.
+The CSR is cached per graph (as a *promise* — OPFS grants one sync access
+handle per file, so two overlapping reads would make the loser throw) and
+dropped on re-ingest, since a re-imported file reuses its graph id. Degrees are
+likewise out + in — out-degree alone understates hub nodes badly on an edge
+list read as a network. Degree and neighbour count legitimately differ (the
+1M/10M run below shows `degree 1,731 · 1,724 neighbours`): degree counts edge
+endpoints, neighbours counts distinct nodes.
+
+Results are capped: 20k neighbours to the renderer, 100 into the sidebar list,
+50 search hits. The UI says when a list is a prefix rather than the whole set.
+
+**Measured on reference hardware** (M3 Air, headed Chromium, WebGPU/Metal-3,
+`medium` 1M nodes / 10M edges, `bench/results/explore-medium_csv-2026-07-31-22-49.json`,
+harness `tests/manual-explore.mjs`). The claims this decision rests on are
+numbers, per D5:
+
+- **Pick: median 0.09 ms, max 0.89 ms** per hit-test. The grid is doing its
+  job — a linear rescan of 1M positions would be ~100× that, per pointermove.
+  Query cost is bounded by construction: the pick radius is a fixed number of
+  *screen* pixels, so zooming out grows it without limit in world units, and
+  `MAX_REACH_CELLS` clamps a query to ~4k cells rather than letting it degrade
+  into the full scan the index exists to avoid.
+- **Search: median 4.1 ms per keystroke, worst 35.8 ms**, over ~8 MB of
+  dictionary. A query matching nothing costs 4.5 ms, not a full scan, because
+  the loop stops once neither bucket can still change the ranking — before that
+  fix a miss scanned all 1M ids on every keystroke. 35.8 ms is one dropped
+  frame on a keystroke; acceptable, and the fix if it grows is an n-gram index
+  over the same bytes, not per-node JS strings.
+- **Neighbourhood: median 30.8 ms** of worker time per selection, including the
+  O(n+m) reverse scan at 10M edges. Off the main thread, so the render loop
+  does not see it; the earlier "a few ms" guess in this document was wrong by
+  ~10×, which is the reason D5 exists.
+- **Pan/zoom after selection: 30 fps** — but that is the **rAF ceiling on this
+  machine in this power state**, not our limit: a blank page measured 30.2 fps
+  in the same session. It clears §9's ≥30 fps, and it is *not* comparable to
+  M2's 56.9 median, which was captured when rAF was running at 60. Two things
+  changed that would affect a real comparison anyway, so M2's numbers should be
+  re-taken rather than diffed: the explore panel takes 17rem from a fill-bound
+  canvas (D8), and `manual-render.mjs`'s cursor moves now also drive picking.
+- **Main-thread heap: 446 MB** after exercising search, six selections, a hover
+  sweep and pan/zoom. Well inside budget, but far above M2's ~81 MB, which was
+  sampled right after load and before any of this existed.
+
+**Testing.** The renderers implement the highlight overlay separately (WebGPU
+storage buffers vs. WebGL2 instanced attributes) and a bad GL draw call raises
+no exception, so `tests/explore.spec.ts` asserts *pixels*: clearing a selection
+leaves the camera untouched, so the two frames may differ only by the overlay.
+That assertion was checked against a deliberately broken draw before being
+trusted. Headless Chromium has no WebGPU, so CI covers the WebGL2 overlay and a
+headed run on the reference laptop covers the WebGPU one (D3's caveat again).
+Neighbour and degree assertions use ground truth read out of `tiny.csv`, not the
+app's own earlier output — the first version of the test compared the app to
+itself and would have passed on a garbled dictionary decode.
+
+Three failure modes found in review are worth recording, because none of them
+raise an error and all three were invisible to the tests as first written:
+a fresh `Camera` on a re-layout kept its 1×1 default (the viewport was only set
+when the canvas backing store changed), which made every node quad cover the
+screen and **hung the tab**; a UA-cancelled pointer gesture latched `dragging`,
+which killed hover permanently; and the untagged `{type:'error'}` channel let a
+failed selection abort an in-flight layout. Errors now carry the `request` that
+failed, and `tests/explore.spec.ts` covers the re-layout case.
+
+**Revisit if:** search stops fitting in a keystroke's budget at 1M nodes (the
+fix is an n-gram index over the same bytes, not per-node JS strings); or a hub
+selection makes the 30.8 ms reverse scan visible, which would justify building
+the reverse CSR once per graph — it is one O(n+m) pass, so it pays for itself
+after a single extra click if the memory is ever affordable.
