@@ -267,3 +267,73 @@ app would. Self-hosted deployments must terminate TLS.
 would drop the artifact to ~10 MB with an OS-native file picker); or the wasm
 bundle grows past what is comfortable to embed, at which point the assets move
 beside the binary rather than inside it.
+
+## D11 — The layout algorithm lives in Rust; the no-WebGPU tier runs it in WASM
+
+M3 shipped the force sim twice: the WGSL compute shader (`web/src/layout/gpu.ts`)
+and a TypeScript CPU reference/fallback (`web/src/layout/cpu.ts`). The TS copy
+was expedient — during calibration the force model changed three times, and
+keeping both engines in one language avoided a wasm-pack rebuild per tweak —
+but it contradicted the project's own rule that algorithms live in `skein-core`,
+natively testable, with `skein-wasm` a thin boundary. No decision ever justified
+it; it was leftover calibration velocity.
+
+**Decision:** the algorithm is `crates/skein-core/src/layout.rs`. It owns the
+force engine (`LevelSim`), the seeded disc scatter, prolongation, the per-level
+schedules and the multilevel driver (`MultilevelLayout`). `skein-wasm` adds a
+`LayoutSession` wrapper that coarsens and steps in chunks; the ingest worker
+drives it and posts progress, so the whole no-WebGPU tier now runs in WASM off
+the main thread. `cpu.ts` is deleted. What stays in TypeScript is only what must:
+the WGSL engine, and the main-thread orchestration around it (`multilevel.ts`),
+because the WebGPU device is main-thread-owned and the wasm module lives in the
+worker. That leaves the seeding/prolongation helpers duplicated between
+`multilevel.ts` and `layout.rs` — deliberate, and called out in both files;
+they are ~20 lines each and the alternative is a second wasm instance on the
+main thread.
+
+**The port is exact.** Before deleting `cpu.ts` both implementations were run on
+the same 80-node weighted graph with the same seed for 120 iterations
+(exercising all three repulsion fields, degree-dissuaded attraction, cooling and
+clamping): all 160 output floats were bit-identical. The Rust module keeps that
+honest with a mulberry32 test pinned to values logged from the TS generator, a
+determinism test, a world-bounds test, a clique-separation test and a multilevel
+test that checks planted communities separate.
+
+**The fallback node cap rises from 150k to 1M — measured, not guessed.** The old
+`CPU_MAX_NODES = 150_000` bounded the TS engine; levels above it got
+prolongation only. Measured on the reference laptop (M3 Air, headed Chromium
+with `navigator.gpu` hidden, WebGL2 renderer, harness
+`tests/manual-layout-fallback.mjs`, results in
+`bench/results/layout-fallback-*`):
+
+- `small` 100k/500k — **3.8 s** end to end, all three levels simulated
+  (~27 ms/iter at 100k nodes, versus 21 ms/iter native: WASM costs ~1.3×, not
+  the 2× assumed).
+- `medium` 1M/10M — **23.9 s** of §9's 45 s budget: 4.9 s hierarchy, then
+  1.6 / 1.5 / 4.6 / 11.3 s per level, the last being the full 1M-node level at
+  40 iterations. Post-layout pan/zoom on WebGL2 held 43.8 fps min, 80 MB JS heap.
+  With the cap at 400k the finest level was prolongation-only and the run took
+  12.1 s — half the time for a visibly blurrier picture, and 33 s of budget left
+  unspent. Simulating it is the better trade.
+- `clustered` 20k/120k — 1.5 s, communities cleanly separated (the D9 visual
+  gate, now passing on the fallback tier too).
+
+So the cap is **1M nodes**: everything inside §9's top tier gets a real sim on
+the fallback path, and larger graphs still degrade gracefully rather than blow
+the budget (2M/20M would extrapolate to ~47 s, past it).
+
+**Calibration and benchmarks.** `tests/tune-layout.mjs` (which esbuild-bundled
+`cpu.ts` into Node) is replaced by `cargo run --release --example layout_tune`,
+which generates the `clustered` graph natively from the same xorshift64* stream
+as `bench/generate-fixtures.mjs` and prints the same separation metrics — 10.75
+to 11.03 across the ±2× parameter sweep, matching D9's ≈10.7 from the TS
+harness, which is independent evidence the port is faithful. It stays a
+standalone tool rather than joining the D5 ratio gate: it is a quality metric
+(cluster separation) rather than a throughput one, its runtime is seconds not
+milliseconds, and a force-parameter change is *supposed* to move it — a gate
+there would fire on every deliberate tuning commit.
+
+**Revisit if:** the reference hardware class changes (the cap is a wall-clock
+budget, so it moves with the machine); or a future tier needs the layout on the
+main thread, which would justify a second wasm instance and retiring the
+duplicated TS helpers.

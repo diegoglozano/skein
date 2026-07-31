@@ -2,6 +2,10 @@
 // only — buffers stay in the worker (persisted to OPFS) until M2's render
 // path needs them transferred.
 
+import type { LayoutProgress } from '../layout/params';
+
+export type { LayoutProgress };
+
 export interface IngestOptions {
   hasHeader: boolean;
   sourceCol: number;
@@ -41,6 +45,10 @@ export type ToWorker =
   | { type: 'verify'; id: string }
   | { type: 'load'; id: string }
   | { type: 'hierarchy'; id: string }
+  /** Run the whole multilevel layout in WASM (the no-WebGPU tier). */
+  | { type: 'layout'; id: string; seed: number }
+  /** Abandon an in-flight `layout` (view closed, or the seed changed). */
+  | { type: 'cancel-layout' }
   | { type: 'save-positions'; id: string; seed: number; positions: Float32Array }
   | { type: 'load-positions'; id: string; seed: number };
 
@@ -77,6 +85,10 @@ export type FromWorker =
   | { type: 'verified'; id: string; ok: boolean; detail: string }
   | { type: 'loaded'; graph: LoadedGraph }
   | { type: 'hierarchy'; id: string; levels: HierarchyLevelBuffers[] }
+  /** `positions` is a live preview of the finest level, transferred, and only
+   * present on some ticks. */
+  | ({ type: 'layout-progress'; id: string; positions?: Float32Array } & LayoutProgress)
+  | { type: 'layout-done'; id: string; seed: number; positions: Float32Array }
   | { type: 'positions-saved'; id: string }
   | { type: 'positions'; id: string; seed: number; positions: Float32Array | null }
   | { type: 'error'; message: string };

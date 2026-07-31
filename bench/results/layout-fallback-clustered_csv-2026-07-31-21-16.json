@@ -1,0 +1,40 @@
+{
+  "fixture": "clustered.csv",
+  "tier": "no-webgpu (wasm layout in worker)",
+  "backend": "webgl2",
+  "nodes": 20000,
+  "edges": 120000,
+  "positionsHash": "b2640b9a",
+  "layoutMs": 1524,
+  "layoutSecs": 1.5,
+  "phases": [
+    {
+      "phase": "starting…",
+      "secs": 0.015,
+      "sample": "starting…"
+    },
+    {
+      "phase": "building hierarchy…",
+      "secs": 0.039,
+      "sample": "building hierarchy…"
+    },
+    {
+      "phase": "1/2",
+      "secs": 0.5,
+      "sample": "level 1/2 · iter 28/300"
+    },
+    {
+      "phase": "2/2",
+      "secs": 0.981,
+      "sample": "level 2/2 · iter 4/150"
+    },
+    {
+      "phase": "ready in 1.5 s",
+      "secs": 0.239,
+      "sample": "ready in 1.5 s"
+    }
+  ],
+  "fpsMin": 60,
+  "fpsMedian": 60,
+  "usedJSHeapMB": 8
+}
