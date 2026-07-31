@@ -9,6 +9,34 @@ land at the 1M-node / 10M-edge tier. M4 (attributes, filters, search) is next.
 See [REQUIREMENTS.md](REQUIREMENTS.md) for the full brief and
 [docs/DECISIONS.md](docs/DECISIONS.md) for resolved design questions.
 
+## Install
+
+Prebuilt binaries for macOS, Linux, and Windows are attached to each
+[GitHub Release](https://github.com/diegoglozano/skein/releases) by [dist],
+with shell and PowerShell installers:
+
+```sh
+# Shell (Linux/macOS) — downloads the right prebuilt binary
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/diegoglozano/skein/releases/latest/download/skein-installer.sh | sh
+
+# Windows (PowerShell)
+powershell -c "irm https://github.com/diegoglozano/skein/releases/latest/download/skein-installer.ps1 | iex"
+```
+
+Both place the binary in `$CARGO_HOME/bin` (`~/.cargo/bin` by default).
+
+`cargo install skein` is **not** supported: the web bundle is built by npm and
+baked into the binary at compile time, so a crates.io source build would produce
+a binary with no app inside it (docs/DECISIONS.md D10). To build from a checkout:
+
+```sh
+npm install && npm run build    # must precede the cargo build
+cargo build --release -p skein  # ./target/release/skein
+```
+
+[dist]: https://opensource.axo.dev/cargo-dist/
+
 ## Run it
 
 skein is a browser app. The `skein` binary carries the whole app inside it and
@@ -17,12 +45,6 @@ serves it to your own browser — there is no server, and nothing is uploaded.
 ```sh
 skein            # serves http://127.0.0.1:7373 and opens a browser
 ```
-
-Prebuilt binaries for macOS, Linux, and Windows are on the
-[releases page](https://github.com/diegoglozano/skein/releases), with shell and
-PowerShell installers. `cargo install` is not supported: the web bundle is built
-by npm and baked in at compile time, so a crates.io source build would produce a
-binary with no app inside it (docs/DECISIONS.md D10).
 
 The port is fixed on purpose — graphs you ingest are stored in the browser per
 origin, and the origin includes the port, so a different port hides them.
@@ -87,11 +109,17 @@ CI fails on a >20% regression against `bench/baselines/native-bench.json`.
 
 ## Releasing
 
-Packaging is [dist](https://github.com/axodotdev/cargo-dist), configured in
-`dist-workspace.toml`. Tag and push; `.github/workflows/release.yml` builds each
-target, running the web build first via `.github/workflows/build-setup.yml` so
-the binary actually contains the app. After changing `dist-workspace.toml`, run
-`dist generate` and commit the regenerated workflow.
+Packaging is [dist], configured in `dist-workspace.toml`. Bump the version in
+`crates/skein-cli/Cargo.toml`, then tag and push:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` builds every target, runs the web build first via
+`.github/workflows/build-setup.yml` so the binary actually contains the app, and
+creates the GitHub Release with the installers attached. After changing
+`dist-workspace.toml`, run `dist generate` and commit the regenerated workflow.
 
 ## License
 

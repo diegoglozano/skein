@@ -100,7 +100,7 @@ npm run fixtures                 # tiny + small fixtures (gitignored, required f
 npm run dev                      # app :5173, spike at /spike.html?fixture=tiny
 npm run build -w web             # typecheck + production build (CSP injected here only)
 npm run test -w tests            # privacy gate + spike (needs fixtures + built web)
-cargo run -p skein-cli -- --web-root web/dist    # the shippable binary (D10)
+cargo run -p skein -- --web-root web/dist        # the shippable binary (D10)
 cargo run --release --example bench | node bench/compare-bench.mjs   # ratio gate
 ```
 

@@ -6,17 +6,32 @@ members = ["cargo:."]
 # re-run `dist generate` and commit the result. Nothing checks this for you.
 [dist]
 cargo-dist-version = "0.32.0"
-ci = ["github"]
+ci = "github"
 installers = ["shell", "powershell"]
 targets = [
     "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
     "x86_64-apple-darwin",
     "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
     "x86_64-pc-windows-msvc",
 ]
+# Where the shell/PowerShell installers place the binary.
+install-path = "CARGO_HOME"
+hosting = "github"
+install-updater = false
+# SLSA build-provenance attestations for released artifacts.
+github-attestations = true
 # The binary is only useful with web/dist compiled into it, and that is built by
 # npm, not cargo. This snippet runs the web build on every release runner before
 # cargo gets invoked. Without it dist would happily ship an assetless binary.
 github-build-setup = "build-setup.yml"
-install-updater = false
+
+# Homebrew, as in revector, is deliberately not enabled yet: publishing to the
+# tap needs a HOMEBREW_TAP_TOKEN secret on this repo (a PAT with contents:write
+# on diegoglozano/homebrew-tap) and skein has no secrets set, so the release job
+# would fail. Add the secret, then uncomment these three lines together with
+# "homebrew" in `installers` above and re-run `dist generate`.
+#
+# tap = "diegoglozano/homebrew-tap"
+# publish-jobs = ["homebrew"]

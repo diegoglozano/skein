@@ -70,7 +70,7 @@ export default defineConfig({
       // Embeds whatever is in web/dist at compile time, so `npm run build`
       // must have run first. The generous timeout covers a cold cargo build.
       command:
-        `cargo run --quiet --release -p skein-cli -- serve ` +
+        `cargo run --quiet --release -p skein -- serve ` +
         `--port ${CLI_PORT} --no-open --fixtures bench/fixtures`,
       port: CLI_PORT,
       cwd: '..',
