@@ -47,7 +47,7 @@ ARG SAMPLE_FIXTURE=""
 RUN mkdir -p bench/fixtures \
  && if [ -n "$SAMPLE_FIXTURE" ]; then node bench/generate-fixtures.mjs "$SAMPLE_FIXTURE"; fi
 
-RUN cargo build --release -p skein-cli
+RUN cargo build --release -p skein
 
 FROM debian:bookworm-slim AS runtime
 

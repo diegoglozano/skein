@@ -240,14 +240,22 @@ includes the port, so picking a free port per launch would orphan every graph
 the user had ingested. A busy port is an error with an explanation, not a
 silent fallback.
 
-**Packaging is cargo-dist** (`dist`, v0.32.0): prebuilt archives plus shell and
-PowerShell installers for macOS/Linux/Windows, x86_64 and aarch64. The one piece
-of glue is `github-build-setup`: cargo knows nothing about wasm-pack or Vite, so
-without a pre-build hook `dist` would cheerfully ship a binary with no app
-inside it. It runs the web build on each target runner (~1 min against several
-minutes of Rust) and then asserts `web/dist/index.html` exists. `cargo install`
-is *not* a supported path for the same reason — crates.io would get a source
-package with no bundle.
+**Packaging is cargo-dist** (`dist`, v0.32.0), configured to match the
+conventions already in use in `diegoglozano/revector`: `install-path =
+"CARGO_HOME"`, `hosting = "github"`, `github-attestations`, and the same target
+list including `x86_64-unknown-linux-musl`. The one piece of glue skein needs
+and revector does not is `github-build-setup`: cargo knows nothing about
+wasm-pack or Vite, so without a pre-build hook `dist` would cheerfully ship a
+binary with no app inside it. It runs the web build on each target runner (~1
+min against several minutes of Rust) and then asserts `web/dist/index.html`
+exists. `cargo install` is *not* a supported path for the same reason —
+crates.io would get a source package with no bundle.
+
+The package is named `skein` (living in `crates/skein-cli/`) because dist names
+every artifact after the package: the installer users curl is
+`skein-installer.sh`, not `skein-cli-installer.sh`. Homebrew is configured but
+commented out — the tap push needs a `HOMEBREW_TAP_TOKEN` secret this repo does
+not have, and enabling it before the secret exists would fail the release job.
 
 **Self-hosting is the same binary in a container** (`Dockerfile`, multi-stage:
 node+rust builder → debian-slim runtime, non-root). The caveat that matters:
