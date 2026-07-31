@@ -242,6 +242,12 @@ License: **Apache-2.0** (matches cosmos.gl, permissive enough for corporate adop
 - Edge rendering above ~20M edges: bundle, sample, or draw a density field? Sampling is
   simplest and probably right for v1.
 - Do we need `memory64` for the 50M-edge tier, and is it available enough to rely on?
+- **Deferred: a Tauri desktop app.** Wanted for the OS-native file picker, a real
+  app icon, and a ~10 MB artifact instead of the ~12 MB binary that embeds the
+  bundle. Blocked on WebGPU in WebKitGTK, which is unimplemented — a Tauri build
+  today would silently drop Linux users to the WebGL2 renderer and the CPU sim
+  (docs/DECISIONS.md D10). Revisit when WebKitGTK ships it; until then `skein`
+  the binary (D10) covers the same want without the regression.
 
 ## 14. Working notes for implementation
 

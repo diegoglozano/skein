@@ -9,3 +9,7 @@ description = "Core graph data structures for skein: ID interning, CSR, coarseni
 [dependencies]
 
 [dev-dependencies]
+
+[package.metadata.dist]
+# Library crate — nothing to ship as a binary.
+dist = false

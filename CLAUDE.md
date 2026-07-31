@@ -62,11 +62,28 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   (§9: 45 s), post-layout pan/zoom min 56 fps. Same-seed determinism is
   e2e-tested across fresh browser contexts (`tests/layout.spec.ts`).
   Known: grid-banding artifact in ultra-dense hairball cores (D9).
+- **Distribution — done (2026-07-31), pulled ahead of M5 (D10).**
+  `crates/skein-cli` builds a `skein` binary that embeds `web/dist` (build.rs
+  → `include_bytes!`; a missing bundle yields an empty table plus a cargo
+  warning, so `cargo test --workspace` still works without an npm build) and
+  serves it over loopback with tiny_http, then opens the user's real browser.
+  Deliberately not a webview: WebKitGTK has no WebGPU, so Tauri would
+  silently downgrade Linux to WebGL2 + CPU sim — deferred to §13. The server
+  exists because the app needs COOP/COEP (§8) and the D1 CSP, both of which
+  fail *quietly*; the CSP now lives in three places and `server.rs`'s
+  `csp_matches_headers_file` test fails on drift. Port 7373 is fixed because
+  OPFS is origin-keyed and an ephemeral port would orphan ingested graphs.
+  The binary is a second deployment path, so it runs the no-network gate as
+  its own Playwright project (`cli`). Packaging: `dist` 0.32.0
+  (`dist-workspace.toml`), whose `github-build-setup` runs wasm-pack + vite
+  on each release runner — without it dist ships an assetless binary.
+  `Dockerfile` self-hosts the same binary; **needs TLS**, since WebGPU and
+  SharedArrayBuffer require a secure context.
 - **M4 — next up:** DuckDB-WASM attributes, filters, search, hover,
   selection (§10; D4 two-file ingest). Also: raise the D8 edge cap
   (post-layout headroom), and the D9 banding artifact if it bothers real
   datasets.
-- **M5:** not started; see §11.
+- **M5:** not started; see §11 — distribution (D10) is already done.
 
 M0 facts worth keeping: headless Chromium falls back to SwiftShader even on
 GPU machines — real-hardware runs must be headed; cosmos.gl 3.4 is luma.gl 9
@@ -83,6 +100,7 @@ npm run fixtures                 # tiny + small fixtures (gitignored, required f
 npm run dev                      # app :5173, spike at /spike.html?fixture=tiny
 npm run build -w web             # typecheck + production build (CSP injected here only)
 npm run test -w tests            # privacy gate + spike (needs fixtures + built web)
+cargo run -p skein-cli -- --web-root web/dist    # the shippable binary (D10)
 cargo run --release --example bench | node bench/compare-bench.mjs   # ratio gate
 ```
 

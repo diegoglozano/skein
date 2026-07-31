@@ -1,0 +1,27 @@
+# Injected into dist's generated release workflow (dist-workspace.toml:
+# github-build-setup), ahead of the cargo build on every target runner.
+#
+# skein-cli's build.rs bakes web/dist into the binary. web/dist is produced by
+# wasm-pack + vite, which cargo knows nothing about — so without these steps a
+# release build succeeds and ships a binary that refuses to serve anything.
+#
+# This does re-run the web build once per target. It is ~1 minute against
+# several minutes of Rust compilation, and it keeps each runner self-contained.
+- name: Install Node
+  uses: actions/setup-node@v4
+  with:
+    node-version: 22
+    cache: npm
+- name: Install wasm-pack
+  uses: taiki-e/install-action@v2
+  with:
+    tool: wasm-pack
+- name: Add wasm target
+  run: rustup target add wasm32-unknown-unknown
+- name: Install npm dependencies
+  run: npm ci
+- name: Build the web bundle
+  run: npm run build
+- name: Fail if the bundle is missing
+  shell: bash
+  run: test -f web/dist/index.html

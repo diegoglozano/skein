@@ -4,15 +4,54 @@ A fully client-side, open source viewer for large network graphs. Upload an
 edge list, get an interactive force-directed layout. Your data never leaves
 the tab — enforced by CSP and an automated no-network test, not by promise.
 
-**Status: pre-M0.** Scaffold + the cosmos.gl evaluation spike. See
-[REQUIREMENTS.md](REQUIREMENTS.md) for the full brief and
+**Status: M3 done** — ingest, rendering, and deterministic multilevel layout all
+land at the 1M-node / 10M-edge tier. M4 (attributes, filters, search) is next.
+See [REQUIREMENTS.md](REQUIREMENTS.md) for the full brief and
 [docs/DECISIONS.md](docs/DECISIONS.md) for resolved design questions.
+
+## Run it
+
+skein is a browser app. The `skein` binary carries the whole app inside it and
+serves it to your own browser — there is no server, and nothing is uploaded.
+
+```sh
+skein            # serves http://127.0.0.1:7373 and opens a browser
+```
+
+Prebuilt binaries for macOS, Linux, and Windows are on the
+[releases page](https://github.com/diegoglozano/skein/releases), with shell and
+PowerShell installers. `cargo install` is not supported: the web bundle is built
+by npm and baked in at compile time, so a crates.io source build would produce a
+binary with no app inside it (docs/DECISIONS.md D10).
+
+The port is fixed on purpose — graphs you ingest are stored in the browser per
+origin, and the origin includes the port, so a different port hides them.
+
+### Self-hosting
+
+```sh
+docker build -t skein .
+docker run --rm -p 7373:7373 skein
+```
+
+**Serve it over HTTPS.** WebGPU and SharedArrayBuffer are only available in a
+secure context (TLS, or localhost). Reached over plain HTTP at a LAN address the
+app still loads, but falls back to the WebGL2 renderer and the CPU layout with
+no visible error. Put it behind a TLS-terminating proxy.
+
+To include a downloadable sample graph at `/fixtures/`, pass a preset from
+`bench/generate-fixtures.mjs`:
+
+```sh
+docker build --build-arg SAMPLE_FIXTURE=small -t skein .
+```
 
 ## Layout
 
 ```
-crates/skein-core/   Rust: ID interning, CSR, (later) coarsening — tested natively
+crates/skein-core/   Rust: ID interning, CSR, coarsening — tested natively
 crates/skein-wasm/   wasm-bindgen boundary
+crates/skein-cli/    the `skein` binary: embeds web/dist and serves it
 web/                 React + Vite app; spike.html is the M0 renderer spike
 bench/               fixture generator, native micro-benchmarks, results
 tests/               Playwright: the no-network privacy gate + spike runner
@@ -45,6 +84,14 @@ cargo run --release --example bench | node bench/compare-bench.mjs
 ```
 
 CI fails on a >20% regression against `bench/baselines/native-bench.json`.
+
+## Releasing
+
+Packaging is [dist](https://github.com/axodotdev/cargo-dist), configured in
+`dist-workspace.toml`. Tag and push; `.github/workflows/release.yml` builds each
+target, running the web build first via `.github/workflows/build-setup.yml` so
+the binary actually contains the app. After changing `dist-workspace.toml`, run
+`dist generate` and commit the regenerated workflow.
 
 ## License
 

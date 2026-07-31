@@ -1,0 +1,22 @@
+[workspace]
+members = ["cargo:."]
+
+# Release packaging for the `skein` binary (docs/DECISIONS.md D10).
+# .github/workflows/release.yml is generated from this file — after editing it,
+# re-run `dist generate` and commit the result. Nothing checks this for you.
+[dist]
+cargo-dist-version = "0.32.0"
+ci = ["github"]
+installers = ["shell", "powershell"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+# The binary is only useful with web/dist compiled into it, and that is built by
+# npm, not cargo. This snippet runs the web build on every release runner before
+# cargo gets invoked. Without it dist would happily ship an assetless binary.
+github-build-setup = "build-setup.yml"
+install-updater = false
