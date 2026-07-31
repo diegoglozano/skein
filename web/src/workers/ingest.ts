@@ -3,7 +3,13 @@
 // chunks, then persists the flat buffers to OPFS. All hot-path data stays in
 // typed arrays; this file only moves bytes and posts progress.
 
-import init, { build_layout_hierarchy, IngestSession, LayoutSession } from '../wasm-pkg/skein_wasm';
+import init, {
+  build_layout_hierarchy,
+  node_neighbors,
+  total_degrees,
+  IngestSession,
+  LayoutSession,
+} from '../wasm-pkg/skein_wasm';
 import wasmUrl from '../wasm-pkg/skein_wasm_bg.wasm?url';
 import type {
   FromWorker,
@@ -18,6 +24,7 @@ import {
   listGraphs,
   loadGraphCsr,
   loadGraphEdges,
+  loadGraphDictionary,
   loadPositions,
   persistGraphBuffers,
   savePositions,
@@ -43,6 +50,55 @@ const ready = init({ module_or_path: wasmUrl });
 /** Bumped by every `layout`/`cancel-layout` message; an in-flight run whose
  * epoch is stale abandons itself at the next chunk boundary. */
 let layoutEpoch = 0;
+
+/** Most neighbours we hand back for one selection. The UI highlights them and
+ * lists a prefix; a 1M-degree hub would blow both up for no readable gain. */
+const NEIGHBOR_CAP = 20_000;
+
+/**
+ * Last graph's directed CSR, so repeated selections don't re-read 44 MB from
+ * OPFS per click. One graph is enough: the view shows one at a time.
+ *
+ * Cached as a *promise*, not a value: `onmessage` is async and several
+ * handlers want the CSR, so two overlapping requests would otherwise both
+ * call `loadGraphCsr` — and OPFS grants only one sync access handle per file,
+ * so the loser rejects with NoModificationAllowedError.
+ */
+let csrCache: { id: string; csr: Promise<CsrBuffers> } | null = null;
+
+interface CsrBuffers {
+  offsets: Uint32Array;
+  targets: Uint32Array;
+}
+
+function cachedCsr(id: string): Promise<CsrBuffers> {
+  if (csrCache?.id !== id) {
+    csrCache = {
+      id,
+      // Drop a failed read so the next request retries instead of caching it.
+      csr: loadGraphCsr(id).catch((err) => {
+        if (csrCache?.id === id) csrCache = null;
+        throw err;
+      }),
+    };
+  }
+  return csrCache.csr;
+}
+
+/** 1-hop neighbourhood, both directions. The traversal itself is
+ * `skein_core::neighbors` — algorithms stay in the core crate, natively
+ * tested; this only moves buffers. */
+async function neighbors(id: string, node: number) {
+  await ready;
+  const { offsets, targets } = await cachedCsr(id);
+  const { neighbors: list, total } = node_neighbors(offsets, targets, node, NEIGHBOR_CAP) as {
+    neighbors: Uint32Array;
+    total: number;
+  };
+  postMessage({ type: 'neighbors', id, node, neighbors: list, total } satisfies FromWorker, {
+    transfer: [list.buffer],
+  });
+}
 
 function post(msg: FromWorker) {
   postMessage(msg);
@@ -159,7 +215,7 @@ const yieldToQueue = () => new Promise<void>((r) => setTimeout(r, 0));
  */
 async function layout(id: string, seed: number, epoch: number) {
   await ready;
-  const { offsets, targets } = await loadGraphCsr(id);
+  const { offsets, targets } = await cachedCsr(id);
   const session = new LayoutSession(
     offsets,
     targets,
@@ -203,6 +259,9 @@ onmessage = async (event: MessageEvent<ToWorker>) => {
   try {
     switch (msg.type) {
       case 'ingest':
+        // Re-importing the same file reuses its graph id and rewrites csr.bin,
+        // so a cached CSR would answer later queries from the old graph.
+        csrCache = null;
         await ingest(msg.file, msg.options);
         break;
       case 'list':
@@ -214,19 +273,30 @@ onmessage = async (event: MessageEvent<ToWorker>) => {
         break;
       }
       case 'load': {
-        const { nodeCount, edgeCount, endpoints } = await loadGraphEdges(msg.id);
+        await ready;
+        const { nodeCount, edgeCount, endpoints, offsets, targets } = await loadGraphEdges(msg.id);
+        // csr.bin is read exactly once per open: seed the cache with what we
+        // just read, so the hierarchy and the first selection reuse it.
+        csrCache = { id: msg.id, csr: Promise.resolve({ offsets, targets }) };
+        const degrees = total_degrees(offsets, targets);
+        const { idBytes, idOffsets } = await loadGraphDictionary(msg.id);
         postMessage(
           {
             type: 'loaded',
-            graph: { id: msg.id, nodeCount, edgeCount, endpoints },
+            graph: { id: msg.id, nodeCount, edgeCount, endpoints, idBytes, idOffsets, degrees },
           } satisfies FromWorker,
-          { transfer: [endpoints.buffer] },
+          {
+            transfer: [endpoints.buffer, idBytes.buffer, idOffsets.buffer, degrees.buffer],
+          },
         );
         break;
       }
+      case 'neighbors':
+        await neighbors(msg.id, msg.node);
+        break;
       case 'hierarchy': {
         await ready;
-        const { offsets, targets } = await loadGraphCsr(msg.id);
+        const { offsets, targets } = await cachedCsr(msg.id);
         const levels = build_layout_hierarchy(
           offsets,
           targets,
@@ -263,6 +333,10 @@ onmessage = async (event: MessageEvent<ToWorker>) => {
       }
     }
   } catch (err) {
-    post({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+    post({
+      type: 'error',
+      message: err instanceof Error ? err.message : String(err),
+      request: msg.type,
+    });
   }
 };

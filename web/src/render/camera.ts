@@ -39,11 +39,23 @@ export class Camera {
     const clamped = Math.min(1e5, Math.max(1e-4, this.zoom * factor));
     const applied = clamped / this.zoom;
     if (applied === 1) return;
-    const worldX = this.centerX + (xPx - this.widthPx / 2) / this.zoom;
-    const worldY = this.centerY - (yPx - this.heightPx / 2) / this.zoom;
+    const { x: worldX, y: worldY } = this.worldAt(xPx, yPx);
     this.zoom = clamped;
     this.centerX = worldX - (xPx - this.widthPx / 2) / this.zoom;
     this.centerY = worldY + (yPx - this.heightPx / 2) / this.zoom;
+  }
+
+  /** Inverse of the view transform: device pixels → world coordinates. */
+  worldAt(xPx: number, yPx: number): { x: number; y: number } {
+    return {
+      x: this.centerX + (xPx - this.widthPx / 2) / this.zoom,
+      y: this.centerY - (yPx - this.heightPx / 2) / this.zoom,
+    };
+  }
+
+  /** World units spanned by one device pixel — the scale for a pick radius. */
+  worldPerPixel(): number {
+    return 1 / this.zoom;
   }
 
   view(pointSizePx: number): ViewTransform {

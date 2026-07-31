@@ -1,0 +1,99 @@
+{
+  "fixture": "medium.csv",
+  "backend": "webgpu",
+  "adapterInfo": "apple metal-3",
+  "nodes": 1000000,
+  "edges": 10000000,
+  "canvasCssPx": {
+    "width": 1303,
+    "height": 959
+  },
+  "layoutWallMs": 12374,
+  "search": {
+    "perKeystroke": [
+      {
+        "keystrokeMs": 23,
+        "scanMs": 0.3549998998641968
+      },
+      {
+        "keystrokeMs": 5,
+        "scanMs": 0.23000001907348633
+      },
+      {
+        "keystrokeMs": 5,
+        "scanMs": 0.4950000047683716
+      },
+      {
+        "keystrokeMs": 7,
+        "scanMs": 4.104999899864197
+      },
+      {
+        "keystrokeMs": 40,
+        "scanMs": 35.78999996185303
+      },
+      {
+        "keystrokeMs": 28,
+        "scanMs": 24.37000000476837
+      },
+      {
+        "keystrokeMs": 19,
+        "scanMs": 15.695000052452087
+      }
+    ],
+    "medianScanMs": 4.104999899864197,
+    "medianKeystrokeMs": 19,
+    "miss": {
+      "keystrokeMs": 7,
+      "scanMs": 4.4700000286102295
+    }
+  },
+  "select": {
+    "first": {
+      "uiMs": 132,
+      "workerMs": 31.170000076293945
+    },
+    "followed": [
+      {
+        "uiMs": 132,
+        "workerMs": 30.769999980926514
+      },
+      {
+        "uiMs": 134,
+        "workerMs": 31.725000023841858
+      },
+      {
+        "uiMs": 130,
+        "workerMs": 30.62000000476837
+      },
+      {
+        "uiMs": 131,
+        "workerMs": 30.695000052452087
+      },
+      {
+        "uiMs": 134,
+        "workerMs": 32.139999985694885
+      }
+    ],
+    "medianWorkerMs": 30.769999980926514
+  },
+  "pick": {
+    "samples": 40,
+    "medianMs": 0.09000003337860107,
+    "maxMs": 0.8849999904632568
+  },
+  "panZoom": {
+    "fpsSamples": [
+      30,
+      30,
+      30,
+      30,
+      30,
+      30,
+      30,
+      30
+    ],
+    "fpsMin": 30,
+    "fpsMedian": 30
+  },
+  "usedJSHeapMB": 446
+}

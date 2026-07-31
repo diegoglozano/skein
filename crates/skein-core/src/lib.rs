@@ -7,6 +7,7 @@
 mod coarsen;
 mod csr;
 mod csv;
+mod explore;
 mod ingest;
 mod interner;
 mod layout;
@@ -14,6 +15,7 @@ mod layout;
 pub use coarsen::{build_hierarchy, coarsen_once, symmetrize, HierarchyLevel};
 pub use csr::Csr;
 pub use csv::CsvScanner;
+pub use explore::{neighbors, total_degrees};
 pub use ingest::{EdgeIngest, IngestConfig, IngestOutput};
 pub use interner::Interner;
 pub use layout::{

@@ -1,15 +1,19 @@
-// Graph view: renders a loaded graph with pan/zoom, and owns the M3 layout
-// flow — load persisted positions for the current seed, or compute them and
-// persist per seed. Two engines, same algorithm: with WebGPU the WGSL compute
-// sim runs here on the main thread (the device is main-thread-owned), so the
-// hierarchy is fetched from the worker; without it the whole multilevel layout
-// runs in WASM inside the worker and we just render its progress. The seed is
-// user-visible policy (§6): same file + seed ⇒ same picture.
+// Graph view: renders a loaded graph with pan/zoom, owns the M3 layout flow —
+// load persisted positions for the current seed, or compute them and persist
+// per seed — and the M4 explore surface: hover, selection, 1-hop
+// neighbourhood, and id search. Two layout engines, same algorithm: with
+// WebGPU the WGSL compute sim runs here on the main thread (the device is
+// main-thread-owned), so the hierarchy is fetched from the worker; without it
+// the whole multilevel layout runs in WASM inside the worker and we just
+// render its progress. The seed is user-visible policy (§6): same file + seed
+// ⇒ same picture.
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Camera, createRenderer, type RenderGraph, type Renderer } from '../render';
 import { multilevelLayout } from '../layout/multilevel';
 import { WORLD_SIZE, mulberry32, type LayoutProgress } from '../layout/params';
+import { buildPickIndex, pickNode, type PickIndex } from '../interact/pick';
+import { nodeId, searchNodes, type SearchHit } from '../interact/search';
 import type {
   FromWorker,
   HierarchyLevelBuffers,
@@ -23,6 +27,13 @@ export const DEFAULT_SEED = 42;
 // full-length edges cost billions of blended fragments; post-layout edges are
 // short, but the cap stays until re-measured. Sample is a seeded permutation.
 const EDGE_DRAW_CAP = 300_000;
+
+/** Cursor slack for hit-testing, in CSS pixels. */
+const PICK_RADIUS_PX = 12;
+/** Pointer travel below this (CSS px) between down and up counts as a click. */
+const CLICK_SLOP_PX = 4;
+/** Neighbours listed in the sidebar; the highlight still covers all of them. */
+const NEIGHBOR_LIST_LIMIT = 100;
 
 function seededScatter(n: number, seed: number): Float32Array {
   const rand = mulberry32(seed);
@@ -66,6 +77,13 @@ interface RenderStats {
   layoutState: string;
   layoutMs: number | null;
   positionsHash: string | null;
+  /** D5 instrumentation for the explore path: cost of the last hit-test, id
+   * search scan, and worker neighbourhood round trip, in ms. Measured here
+   * rather than from the driving script, whose input round trip is quantised
+   * to the frame period and would report ~33 ms for a 0.1 ms pick. */
+  pickMs: number | null;
+  searchMs: number | null;
+  neighborsMs: number | null;
 }
 
 declare global {
@@ -75,22 +93,46 @@ declare global {
   }
 }
 
-/** Await one worker reply of the given type (matching graph id). */
+/**
+ * Await one worker reply of the given type (matching graph id). Rejects if the
+ * worker reports `request` failing instead — otherwise a throw in the worker
+ * leaves this promise pending forever, and everything awaiting it (including
+ * the view's own teardown) hangs with it.
+ */
 function awaitReply<T extends FromWorker['type']>(
   worker: Worker,
   type: T,
   id: string,
+  request: ToWorker['type'],
 ): Promise<Extract<FromWorker, { type: T }>> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const listener = (event: MessageEvent<FromWorker>) => {
       const msg = event.data;
-      if (msg.type === type && ('id' in msg ? msg.id === id : true)) {
+      const done = (finish: () => void) => {
         worker.removeEventListener('message', listener);
-        resolve(msg as Extract<FromWorker, { type: T }>);
+        finish();
+      };
+      if (msg.type === type && ('id' in msg ? msg.id === id : true)) {
+        done(() => resolve(msg as Extract<FromWorker, { type: T }>));
+      } else if (msg.type === 'error' && msg.request === request) {
+        done(() => reject(new Error(msg.message)));
       }
     };
     worker.addEventListener('message', listener);
   });
+}
+
+/** A node as the sidebar shows it. */
+interface NodeRef {
+  node: number;
+  id: string;
+  degree: number;
+}
+
+interface Neighborhood {
+  node: number;
+  total: number;
+  listed: NodeRef[];
 }
 
 export function GraphView({ graph, name, worker, onClose }: {
@@ -107,6 +149,35 @@ export function GraphView({ graph, name, worker, onClose }: {
   const [layoutState, setLayoutState] = useState('starting…');
   const [error, setError] = useState<string | null>(null);
 
+  const [hover, setHover] = useState<NodeRef | null>(null);
+  const [selected, setSelected] = useState<NodeRef | null>(null);
+  const [neighborhood, setNeighborhood] = useState<Neighborhood | null>(null);
+  const [query, setQuery] = useState('');
+
+  /** Imperative handle into the render effect, for sidebar-driven selection. */
+  const viewApi = useRef<{ select: (node: number) => void; focus: (node: number) => void } | null>(
+    null,
+  );
+
+  const describe = useCallback(
+    (node: number): NodeRef => ({
+      node,
+      id: nodeId(graph.idBytes, graph.idOffsets, node),
+      degree: graph.degrees[node],
+    }),
+    [graph],
+  );
+
+  const search = useMemo(() => {
+    if (!query) return null;
+    const t0 = performance.now();
+    const result = searchNodes(graph.idBytes, graph.idOffsets, query);
+    // Records the scan itself, separately from the keystroke→repaint latency
+    // the driving script sees (D5 instrumentation).
+    if (window.__skeinRender) window.__skeinRender.searchMs = performance.now() - t0;
+    return result;
+  }, [graph, query]);
+
   useEffect(() => {
     const canvas = canvasRef.current!;
     const camera = new Camera();
@@ -115,6 +186,11 @@ export function GraphView({ graph, name, worker, onClose }: {
     let renderer: Renderer | null = null;
     /** Set while a worker-side layout is in flight; see workerLayout below. */
     let detachLayoutListener: (() => void) | null = null;
+    /** Teardown steps, registered as each resource is acquired. `run` can
+     * return early at several awaits (unmounted mid-layout), so cleanup must
+     * not depend on reaching its end — the `message` listener below is on the
+     * long-lived worker and would otherwise outlive every closed view. */
+    const teardown: (() => void)[] = [];
 
     const stats: RenderStats = {
       backend: 'starting…',
@@ -125,6 +201,9 @@ export function GraphView({ graph, name, worker, onClose }: {
       layoutState: 'starting…',
       layoutMs: null,
       positionsHash: null,
+      pickMs: null,
+      searchMs: null,
+      neighborsMs: null,
     };
     window.__skeinRender = stats;
     const setLayout = (s: string) => {
@@ -138,6 +217,7 @@ export function GraphView({ graph, name, worker, onClose }: {
         renderer.dispose();
         return;
       }
+      teardown.push(() => renderer!.dispose());
       setBackend(renderer.backend);
       stats.backend = renderer.backend;
 
@@ -154,33 +234,168 @@ export function GraphView({ graph, name, worker, onClose }: {
       const resize = () => {
         const w = Math.round(canvas.clientWidth * dpr);
         const h = Math.round(canvas.clientHeight * dpr);
-        if (w && h && (canvas.width !== w || canvas.height !== h)) {
-          renderer!.resize(w, h);
-          camera.setViewport(w, h);
-        }
+        if (!w || !h) return;
+        // Only the GPU surface is conditional. The camera is rebuilt with this
+        // effect while the <canvas> element is not, so on a re-run (seed
+        // change) the backing store already matches and the guard skips —
+        // leaving a fresh Camera on its 1x1 default, which silently breaks
+        // both the projection and every screen→world pick.
+        if (canvas.width !== w || canvas.height !== h) renderer!.resize(w, h);
+        camera.setViewport(w, h);
       };
       resize();
       camera.fit(0, 0, WORLD_SIZE, WORLD_SIZE);
       const observer = new ResizeObserver(resize);
       observer.observe(canvas);
+      teardown.push(() => observer.disconnect());
 
+      // ---- Explore state. Picking only becomes available once positions are
+      // final: the index is two O(n) passes, too much to redo per preview tick.
+      let pickIndex: PickIndex | null = null;
+      let livePositions: Float32Array | null = null;
+      let hoverNode = -1;
+      let selectedNode = -1;
+
+      // Overlay buffers. Hover changes at pointer rate while the selection
+      // does not, so the selection is written once per click into a buffer
+      // laid out as [selected, ...neighbours, hover] and hover only rewrites
+      // the trailing slot. Rebuilding both per pointermove meant allocating
+      // and re-uploading ~240 KB for a one-index delta at the neighbour cap.
+      let overlayNodes = new Uint32Array(1);
+      /** Nodes in `overlayNodes` before the hover slot. */
+      let overlayFixed = 0;
+      let overlayEdges = new Uint32Array(0);
+      let neighborsAskedAt = 0;
+
+      const uploadOverlay = () => {
+        if (!renderer) return;
+        const hovered = hoverNode >= 0 && hoverNode !== selectedNode;
+        if (hovered) overlayNodes[overlayFixed] = hoverNode;
+        renderer.setHighlight(overlayNodes.subarray(0, overlayFixed + (hovered ? 1 : 0)), overlayEdges);
+      };
+
+      /** Rebuild the selection part of the overlay (click rate, not hover). */
+      const setSelectionOverlay = (neighbors: Uint32Array) => {
+        const k = neighbors.length;
+        const base = selectedNode >= 0 ? 1 : 0;
+        // +1 for the hover slot at the tail.
+        if (overlayNodes.length < base + k + 1) overlayNodes = new Uint32Array(base + k + 1);
+        if (base) overlayNodes[0] = selectedNode;
+        overlayNodes.set(neighbors, base);
+        overlayFixed = base + k;
+
+        overlayEdges = new Uint32Array(2 * k);
+        for (let i = 0; i < k; i++) {
+          overlayEdges[2 * i] = selectedNode;
+          overlayEdges[2 * i + 1] = neighbors[i];
+        }
+        uploadOverlay();
+      };
+
+      const select = (node: number) => {
+        selectedNode = node;
+        setSelectionOverlay(new Uint32Array(0));
+        setSelected(node >= 0 ? describe(node) : null);
+        setNeighborhood(null);
+        if (node >= 0) {
+          neighborsAskedAt = performance.now();
+          worker.postMessage({ type: 'neighbors', id: graph.id, node } satisfies ToWorker);
+        }
+      };
+
+      const onNeighbors = (event: MessageEvent<FromWorker>) => {
+        const msg = event.data;
+        if (msg.type !== 'neighbors' || msg.id !== graph.id) return;
+        if (msg.node !== selectedNode) return; // a stale reply for a previous click
+        stats.neighborsMs = performance.now() - neighborsAskedAt;
+        setSelectionOverlay(msg.neighbors);
+        // Decode ids once, here — doing it in the JSX re-ran TextDecoder for
+        // every listed neighbour on every hover-driven re-render.
+        const listed: NodeRef[] = [];
+        for (let i = 0; i < Math.min(msg.neighbors.length, NEIGHBOR_LIST_LIMIT); i++) {
+          listed.push(describe(msg.neighbors[i]));
+        }
+        setNeighborhood({ node: msg.node, total: msg.total, listed });
+      };
+      worker.addEventListener('message', onNeighbors);
+      teardown.push(() => worker.removeEventListener('message', onNeighbors));
+
+      const focus = (node: number) => {
+        if (!livePositions) return;
+        const x = livePositions[2 * node];
+        const y = livePositions[2 * node + 1];
+        // Keep the current zoom; just centre the node.
+        camera.centerX = x;
+        camera.centerY = y;
+      };
+      viewApi.current = { select, focus };
+
+      // ---- Pointer: pan/zoom plus pick-on-move and select-on-click.
       let dragging = false;
       let lastX = 0;
       let lastY = 0;
+      let downX = 0;
+      let downY = 0;
+      let travel = 0;
+
+      const pickAt = (clientX: number, clientY: number): number => {
+        if (!pickIndex || !livePositions) return -1;
+        const rect = canvas.getBoundingClientRect();
+        const { x, y } = camera.worldAt((clientX - rect.left) * dpr, (clientY - rect.top) * dpr);
+        const t0 = performance.now();
+        const node = pickNode(
+          pickIndex,
+          livePositions,
+          x,
+          y,
+          PICK_RADIUS_PX * dpr * camera.worldPerPixel(),
+        );
+        stats.pickMs = performance.now() - t0;
+        return node;
+      };
+
       const onPointerDown = (e: PointerEvent) => {
+        if (e.button !== 0) return; // right/middle click must not select
         dragging = true;
-        lastX = e.clientX;
-        lastY = e.clientY;
+        travel = 0;
+        lastX = downX = e.clientX;
+        lastY = downY = e.clientY;
         canvas.setPointerCapture(e.pointerId);
       };
       const onPointerMove = (e: PointerEvent) => {
-        if (!dragging) return;
-        camera.panBy((e.clientX - lastX) * dpr, (e.clientY - lastY) * dpr);
-        lastX = e.clientX;
-        lastY = e.clientY;
+        if (dragging) {
+          camera.panBy((e.clientX - lastX) * dpr, (e.clientY - lastY) * dpr);
+          lastX = e.clientX;
+          lastY = e.clientY;
+          travel = Math.max(travel, Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY));
+          return;
+        }
+        const node = pickAt(e.clientX, e.clientY);
+        if (node === hoverNode) return;
+        hoverNode = node;
+        uploadOverlay();
+        setHover(node >= 0 ? describe(node) : null);
+        canvas.style.cursor = node >= 0 ? 'pointer' : 'default';
       };
-      const onPointerUp = () => {
+      const onPointerUp = (e: PointerEvent) => {
+        // Only a gesture that began on the canvas selects: releasing here
+        // after a press that started in the sidebar is not a click on a node.
+        if (!dragging) return;
         dragging = false;
+        if (travel > CLICK_SLOP_PX) return;
+        select(pickAt(e.clientX, e.clientY));
+      };
+      // Without this, a UA-cancelled gesture leaves `dragging` latched: the
+      // camera then pans with no button held and, worse, pointermove never
+      // reaches the pick branch again — hover and selection die for good.
+      const onPointerCancel = () => {
+        dragging = false;
+      };
+      const onPointerLeave = () => {
+        if (hoverNode < 0) return;
+        hoverNode = -1;
+        uploadOverlay();
+        setHover(null);
       };
       const onWheel = (e: WheelEvent) => {
         e.preventDefault();
@@ -194,7 +409,17 @@ export function GraphView({ graph, name, worker, onClose }: {
       canvas.addEventListener('pointerdown', onPointerDown);
       canvas.addEventListener('pointermove', onPointerMove);
       canvas.addEventListener('pointerup', onPointerUp);
+      canvas.addEventListener('pointercancel', onPointerCancel);
+      canvas.addEventListener('pointerleave', onPointerLeave);
       canvas.addEventListener('wheel', onWheel, { passive: false });
+      teardown.push(() => {
+        canvas.removeEventListener('pointerdown', onPointerDown);
+        canvas.removeEventListener('pointermove', onPointerMove);
+        canvas.removeEventListener('pointerup', onPointerUp);
+        canvas.removeEventListener('pointercancel', onPointerCancel);
+        canvas.removeEventListener('pointerleave', onPointerLeave);
+        canvas.removeEventListener('wheel', onWheel);
+      });
 
       let windowStart = performance.now();
       let windowFrames = 0;
@@ -220,7 +445,7 @@ export function GraphView({ graph, name, worker, onClose }: {
 
       /** WebGPU tier: hierarchy from the worker, WGSL sim on this thread. */
       const gpuLayout = async (device: GPUDevice) => {
-        const hierarchyReply = awaitReply(worker, 'hierarchy', graph.id);
+        const hierarchyReply = awaitReply(worker, 'hierarchy', graph.id, 'hierarchy');
         worker.postMessage({ type: 'hierarchy', id: graph.id } satisfies ToWorker);
         const { levels } = await hierarchyReply;
         if (disposed) return null;
@@ -256,7 +481,9 @@ export function GraphView({ graph, name, worker, onClose }: {
             } else if (msg.type === 'layout-done' && msg.id === graph.id) {
               stop();
               resolve(msg.positions);
-            } else if (msg.type === 'error') {
+            } else if (msg.type === 'error' && msg.request === 'layout') {
+              // Only our own request aborts the layout — a failed hover or
+              // selection query shares this channel and must not kill the view.
               stop();
               reject(new Error(msg.message));
             }
@@ -285,10 +512,13 @@ export function GraphView({ graph, name, worker, onClose }: {
           if (positions[i + 1] > maxY) maxY = positions[i + 1];
         }
         if (minX < maxX && minY < maxY) camera.fit(minX, minY, maxX, maxY, 1.15);
+        // Explore is live from here: hit-testing needs settled coordinates.
+        livePositions = positions;
+        pickIndex = buildPickIndex(positions);
         setLayout(state);
       };
 
-      const saved = awaitReply(worker, 'positions', graph.id);
+      const saved = awaitReply(worker, 'positions', graph.id, 'load-positions');
       worker.postMessage({ type: 'load-positions', id: graph.id, seed } satisfies ToWorker);
       const savedReply = await saved;
       if (disposed) return;
@@ -310,32 +540,41 @@ export function GraphView({ graph, name, worker, onClose }: {
         );
       }
 
-      return () => {
-        observer.disconnect();
-        canvas.removeEventListener('pointerdown', onPointerDown);
-        canvas.removeEventListener('pointermove', onPointerMove);
-        canvas.removeEventListener('pointerup', onPointerUp);
-        canvas.removeEventListener('wheel', onWheel);
-        renderer!.dispose();
-      };
     };
 
-    const cleanup = run().catch((err) => {
-      setError(err instanceof Error ? err.message : String(err));
-      return undefined;
+    run().catch((err) => {
+      if (!disposed) setError(err instanceof Error ? err.message : String(err));
     });
 
     return () => {
       disposed = true;
       cancelAnimationFrame(raf);
+      viewApi.current = null;
       // A worker-side layout would otherwise keep the worker busy and delay
       // the next one (seed change, or a different graph).
       worker.postMessage({ type: 'cancel-layout' } satisfies ToWorker);
       detachLayoutListener?.();
       delete window.__skeinRender;
-      cleanup.then((fn) => fn?.());
+      // Synchronous, not chained onto `run`: if a worker request never gets a
+      // reply, `run` stays pending forever and a deferred teardown would leak
+      // the GPU device, the observer and the worker listener with it. Every
+      // await in `run` re-checks `disposed` before touching the renderer.
+      for (const fn of teardown.splice(0)) fn();
     };
-  }, [graph, seed, worker]);
+  }, [graph, seed, worker, describe]);
+
+  // A re-layout invalidates every coordinate, so the old selection means
+  // nothing visually; clear the explore panel with it.
+  useEffect(() => {
+    setHover(null);
+    setSelected(null);
+    setNeighborhood(null);
+  }, [seed]);
+
+  const pick = useCallback((node: number) => {
+    viewApi.current?.select(node);
+    if (node >= 0) viewApi.current?.focus(node);
+  }, []);
 
   return (
     <div className="graph-view" data-testid="graph-view">
@@ -374,7 +613,87 @@ export function GraphView({ graph, name, worker, onClose }: {
           render failed: {error}
         </p>
       ) : (
-        <canvas ref={canvasRef} aria-label="graph canvas" />
+        <div className="graph-body">
+          <canvas ref={canvasRef} aria-label="graph canvas" />
+
+          <aside className="explore" aria-label="explore panel">
+            <label className="search">
+              <span className="muted">find a node</span>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="node id"
+                aria-label="search node id"
+                data-testid="node-search"
+              />
+            </label>
+
+            {search && (
+              <div className="results" data-testid="search-results">
+                {search.hits.length === 0 ? (
+                  <p className="muted">no match</p>
+                ) : (
+                  <>
+                    <ul>
+                      {search.hits.map((hit: SearchHit) => (
+                        <li key={hit.node}>
+                          <button onClick={() => pick(hit.node)} data-testid="search-hit">
+                            {hit.id}
+                          </button>
+                          <em className="muted">{graph.degrees[hit.node]}</em>
+                        </li>
+                      ))}
+                    </ul>
+                    {search.truncated && <p className="muted">showing the first matches</p>}
+                  </>
+                )}
+              </div>
+            )}
+
+            {hover && !selected && (
+              <div className="node-card" data-testid="hover-card">
+                <h3>{hover.id}</h3>
+                <p className="muted">degree {hover.degree.toLocaleString()}</p>
+              </div>
+            )}
+
+            {selected && (
+              <div className="node-card selected" data-testid="selection-card">
+                <h3>{selected.id}</h3>
+                <p className="muted">
+                  degree {selected.degree.toLocaleString()}
+                  {neighborhood
+                    ? ` · ${neighborhood.total.toLocaleString()} neighbours`
+                    : ' · finding neighbours…'}
+                </p>
+                {neighborhood && neighborhood.listed.length > 0 && (
+                  <ul className="neighbors" data-testid="neighbor-list">
+                    {neighborhood.listed.map((n) => (
+                      <li key={n.node}>
+                        <button onClick={() => pick(n.node)}>{n.id}</button>
+                        <em className="muted">{n.degree}</em>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {neighborhood && neighborhood.total > neighborhood.listed.length && (
+                  <p className="muted">
+                    listing {neighborhood.listed.length} of{' '}
+                    {neighborhood.total.toLocaleString()}
+                  </p>
+                )}
+                <button onClick={() => pick(-1)}>clear selection</button>
+              </div>
+            )}
+
+            {!selected && !hover && !search && (
+              <p className="muted hint">
+                Hover a node for its id and degree, click to select it and highlight its
+                neighbours. Picking wakes up once the layout settles.
+              </p>
+            )}
+          </aside>
+        </div>
       )}
     </div>
   );

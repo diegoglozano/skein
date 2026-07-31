@@ -40,6 +40,23 @@ const EDGE_VS = /* glsl */ `#version 300 es
   }
 `;
 
+// Highlight overlay (M4). The node index comes from a per-instance attribute
+// rather than gl_InstanceID, so only the highlighted subset is drawn.
+const HI_NODE_VS = /* glsl */ `#version 300 es
+  uniform vec2 scale;
+  uniform vec2 offset;
+  uniform vec2 viewportPx;
+  uniform float pointSizePx;
+  in highp uint node;
+  ${POSITION_FETCH}
+  void main() {
+    vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+    vec2 clip = fetchPosition(node) * scale + offset
+      + corner * max(pointSizePx * 2.5, 6.0) / viewportPx;
+    gl_Position = vec4(clip, 0.0, 1.0);
+  }
+`;
+
 const FS = /* glsl */ `#version 300 es
   precision highp float;
   uniform vec4 color;
@@ -76,6 +93,7 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
 
   const nodeProgram = link(gl, NODE_VS, FS);
   const edgeProgram = link(gl, EDGE_VS, FS);
+  const hiNodeProgram = link(gl, HI_NODE_VS, FS);
   const uniforms = (program: WebGLProgram) => ({
     scale: gl.getUniformLocation(program, 'scale'),
     offset: gl.getUniformLocation(program, 'offset'),
@@ -86,14 +104,26 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
   });
   const nodeU = uniforms(nodeProgram);
   const edgeU = uniforms(edgeProgram);
+  const hiNodeU = uniforms(hiNodeProgram);
+
+  // Attribute locations are fixed at link time; setHighlight runs at hover
+  // rate, so don't re-query the driver for them there.
+  const endpointLoc = gl.getAttribLocation(edgeProgram, 'endpoint');
+  const hiNodeLoc = gl.getAttribLocation(hiNodeProgram, 'node');
 
   const positionTex = gl.createTexture();
   const endpointBuf = gl.createBuffer();
   const edgeVao = gl.createVertexArray();
   const nodeVao = gl.createVertexArray(); // attribute-less; VAO keeps state tidy
+  const hiNodeBuf = gl.createBuffer();
+  const hiEdgeBuf = gl.createBuffer();
+  const hiNodeVao = gl.createVertexArray();
+  const hiEdgeVao = gl.createVertexArray();
 
   let nodeCount = 0;
   let edgeCount = 0;
+  let hiNodeCount = 0;
+  let hiEdgeCount = 0;
 
   const uploadPositions = (positions: Float32Array) => {
     const rows = Math.max(1, Math.ceil(nodeCount / TEX_W));
@@ -120,9 +150,31 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
       gl.bindVertexArray(edgeVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, endpointBuf);
       gl.bufferData(gl.ARRAY_BUFFER, graph.endpoints, gl.STATIC_DRAW);
-      const loc = gl.getAttribLocation(edgeProgram, 'endpoint');
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribIPointer(loc, 1, gl.UNSIGNED_INT, 0, 0);
+      gl.enableVertexAttribArray(endpointLoc);
+      gl.vertexAttribIPointer(endpointLoc, 1, gl.UNSIGNED_INT, 0, 0);
+      gl.bindVertexArray(null);
+
+      hiNodeCount = 0;
+      hiEdgeCount = 0;
+    },
+
+    setHighlight(nodes: Uint32Array, edges: Uint32Array) {
+      hiNodeCount = nodes.length;
+      hiEdgeCount = edges.length >> 1;
+
+      gl.bindVertexArray(hiNodeVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, hiNodeBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, nodes, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(hiNodeLoc);
+      gl.vertexAttribIPointer(hiNodeLoc, 1, gl.UNSIGNED_INT, 0, 0);
+      gl.vertexAttribDivisor(hiNodeLoc, 1); // one index per quad instance
+      gl.bindVertexArray(null);
+
+      gl.bindVertexArray(hiEdgeVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, hiEdgeBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, edges, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(endpointLoc);
+      gl.vertexAttribIPointer(endpointLoc, 1, gl.UNSIGNED_INT, 0, 0);
       gl.bindVertexArray(null);
     },
 
@@ -159,6 +211,29 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
       gl.bindVertexArray(nodeVao);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nodeCount);
       gl.bindVertexArray(null);
+
+      if (hiEdgeCount > 0) {
+        gl.useProgram(edgeProgram);
+        gl.uniform2f(edgeU.scale, view.scaleX, view.scaleY);
+        gl.uniform2f(edgeU.offset, view.offsetX, view.offsetY);
+        gl.uniform1i(edgeU.positions, 0);
+        gl.uniform4f(edgeU.color, 1.0, 0.72, 0.28, 0.5);
+        gl.bindVertexArray(hiEdgeVao);
+        gl.drawArrays(gl.LINES, 0, 2 * hiEdgeCount);
+        gl.bindVertexArray(null);
+      }
+      if (hiNodeCount > 0) {
+        gl.useProgram(hiNodeProgram);
+        gl.uniform2f(hiNodeU.scale, view.scaleX, view.scaleY);
+        gl.uniform2f(hiNodeU.offset, view.offsetX, view.offsetY);
+        gl.uniform2f(hiNodeU.viewportPx, view.widthPx, view.heightPx);
+        gl.uniform1f(hiNodeU.pointSizePx, view.pointSizePx);
+        gl.uniform4f(hiNodeU.color, 1.0, 0.72, 0.28, 1.0);
+        gl.uniform1i(hiNodeU.positions, 0);
+        gl.bindVertexArray(hiNodeVao);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, hiNodeCount);
+        gl.bindVertexArray(null);
+      }
     },
 
     resize(widthPx: number, heightPx: number) {
@@ -169,10 +244,15 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
     dispose() {
       gl.deleteTexture(positionTex);
       gl.deleteBuffer(endpointBuf);
+      gl.deleteBuffer(hiNodeBuf);
+      gl.deleteBuffer(hiEdgeBuf);
       gl.deleteVertexArray(edgeVao);
       gl.deleteVertexArray(nodeVao);
+      gl.deleteVertexArray(hiNodeVao);
+      gl.deleteVertexArray(hiEdgeVao);
       gl.deleteProgram(nodeProgram);
       gl.deleteProgram(edgeProgram);
+      gl.deleteProgram(hiNodeProgram);
     },
   };
 }

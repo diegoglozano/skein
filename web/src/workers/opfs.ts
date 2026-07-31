@@ -156,11 +156,16 @@ export async function loadGraphCsr(
  * Load a persisted graph's edges for rendering: bulk-read csr.bin and expand
  * offsets+targets into interleaved endpoint pairs [s0, t0, s1, t1, ...] —
  * the layout the renderer draws directly (one flat pass, no per-edge
- * objects, §4.2).
+ * objects, §4.2). The CSR itself is returned alongside so the caller can
+ * derive degrees and seed its cache without re-reading the file.
  */
-export async function loadGraphEdges(
-  id: string,
-): Promise<{ nodeCount: number; edgeCount: number; endpoints: Uint32Array }> {
+export async function loadGraphEdges(id: string): Promise<{
+  nodeCount: number;
+  edgeCount: number;
+  endpoints: Uint32Array;
+  offsets: Uint32Array;
+  targets: Uint32Array;
+}> {
   const dir = await (await graphsDir()).getDirectoryHandle(id);
   const access = await (await dir.getFileHandle('csr.bin')).createSyncAccessHandle();
   try {
@@ -181,7 +186,33 @@ export async function loadGraphEdges(
         endpoints[2 * e + 1] = targets[e];
       }
     }
-    return { nodeCount: n, edgeCount: m, endpoints };
+    return { nodeCount: n, edgeCount: m, endpoints, offsets, targets };
+  } finally {
+    access.close();
+  }
+}
+
+/**
+ * Load the node dictionary, for the M4 explore path: hover, search and the
+ * node card all need per-node identity on the main thread. Degrees come from
+ * `skein_core::total_degrees` over the CSR the caller already holds — reading
+ * csr.bin again here cost a second 44 MB pass at the §9 top tier.
+ */
+export async function loadGraphDictionary(
+  id: string,
+): Promise<{ idBytes: Uint8Array; idOffsets: Uint32Array }> {
+  const dir = await (await graphsDir()).getDirectoryHandle(id);
+  const access = await (await dir.getFileHandle('dict.bin')).createSyncAccessHandle();
+  try {
+    const header = new Uint32Array(4);
+    access.read(header, { at: 0 });
+    const [magic, n, idBytesLen] = header;
+    if (magic !== DICT_MAGIC) throw new Error(`bad dict.bin magic for ${id}`);
+    const idOffsets = new Uint32Array(n + 1);
+    access.read(idOffsets, { at: 16 });
+    const idBytes = new Uint8Array(idBytesLen);
+    access.read(idBytes, { at: 16 + 4 * (n + 1) });
+    return { idBytes, idOffsets };
   } finally {
     access.close();
   }

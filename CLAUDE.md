@@ -91,10 +91,30 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   rose 150k → 1M on measured numbers (medium 1M/10M lays out in 23.9 s of the
   45 s budget on the fallback tier); `tests/layout-fallback.spec.ts` gates the
   path with WebGPU hidden, `tests/manual-layout-fallback.mjs` measures it.
-- **M4 — next up:** DuckDB-WASM attributes, filters, search, hover,
-  selection (§10; D4 two-file ingest). Also: raise the D8 edge cap
-  (post-layout headroom), and the D9 banding artifact if it bothers real
-  datasets.
+- **M4 — half done (2026-08-01).** Split in two. **Interaction — done:**
+  hover, click selection, 1-hop neighbourhood highlight and id search (§10),
+  no new dependencies. Per D12 only the *cursor-rate* work is main-thread
+  TypeScript (`web/src/interact/`: a uniform pick grid over settled positions,
+  a byte scan over the flat dictionary) because the WASM instance lives in the
+  worker and main-thread code cannot call it. Everything worker-side stays in
+  Rust: `skein-core::explore` (`neighbors`, `total_degrees`, bitmap dedup, six
+  native tests). `load` ships `idBytes`/`idOffsets`/`degrees` and reads csr.bin
+  once; both renderers grew a `setHighlight` overlay pass (WebGPU storage
+  buffers, WebGL2 instanced attributes). `tests/explore.spec.ts` gates it,
+  asserting *pixels* for the overlay and `tiny.csv` ground truth for
+  neighbours/degrees. Real hardware (M3 Air, WebGPU, medium 1M/10M,
+  `bench/results/explore-medium_csv-2026-07-31-22-49.json`): pick 0.09 ms
+  median, search 4.1 ms median per keystroke, neighbourhood 30.8 ms of worker
+  time, 446 MB main-thread heap. Pan/zoom read 30 fps — that was the machine's
+  rAF ceiling that session (a blank page measured 30.2), so it is not
+  comparable to M2's 56.9 median; re-take M2's numbers rather than diffing,
+  since the explore panel also narrowed the fill-bound canvas.
+  **Attributes — not started:** DuckDB-WASM attributes, filters, colour/size
+  by column (D4 two-file ingest). That half carries §13's bundle-size question
+  and needs a privacy decision first: DuckDB-WASM resolves its bundles from a
+  CDN by default and must be fully self-hosted to hold §7.
+  Also still open: raise the D8 edge cap (post-layout headroom), and the D9
+  banding artifact if it bothers real datasets.
 - **M5:** not started; see §11 — distribution (D10) is already done.
 
 M0 facts worth keeping: headless Chromium falls back to SwiftShader even on
@@ -115,6 +135,7 @@ npm run test -w tests            # privacy gate + spike (needs fixtures + built 
 cargo run -p skein -- --web-root web/dist        # the shippable binary (D10)
 cargo run --release --example bench | node bench/compare-bench.mjs   # ratio gate
 cargo run --release --example layout_tune    # force-param calibration (separation metrics)
+node tests/manual-explore.mjs medium.csv     # M4 pick/search/neighbour timings (headed, preview on :4173)
 ```
 
 In managed/remote environments, point Playwright at the pre-installed browser:

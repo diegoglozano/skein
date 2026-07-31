@@ -44,6 +44,14 @@ test('app makes no off-origin requests', async ({ page, baseURL }) => {
     timeout: 15_000,
   });
 
+  // And through the M4 explore path: id search, selection, and the worker
+  // neighbourhood query.
+  await page.getByTestId('node-search').fill('n9999');
+  await page.getByTestId('search-hit').first().click();
+  await expect(page.getByTestId('selection-card')).toContainText('neighbours', {
+    timeout: 15_000,
+  });
+
   // Let any deferred requests (lazy chunks, prefetch, telemetry-by-accident)
   // surface before judging.
   await page.waitForTimeout(2000);
