@@ -32,6 +32,11 @@ export default defineConfig({
       use: { baseURL: `http://localhost:${PREVIEW_PORT}` },
     },
     {
+      name: 'app',
+      testMatch: /ingest\.spec\.ts/,
+      use: { baseURL: `http://localhost:${PREVIEW_PORT}` },
+    },
+    {
       name: 'spike',
       testMatch: /spike\.spec\.ts/,
       use: { baseURL: `http://localhost:${DEV_PORT}` },

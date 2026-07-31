@@ -5,7 +5,7 @@
 //!
 //! Run: cargo run --release --example bench
 
-use skein_core::{Csr, Interner};
+use skein_core::{Csr, EdgeIngest, IngestConfig, Interner};
 use std::time::Instant;
 
 /// Deterministic xorshift so every run interns the same ids.
@@ -47,13 +47,40 @@ fn main() {
     let csr_secs = start.elapsed().as_secs_f64();
 
     assert_eq!(csr.edge_count(), m);
+
+    // Streaming CSV ingest (scanner + interner together), fed in chunks the
+    // size File.stream() typically delivers. Same edges as above, rendered
+    // the way the fixture generator writes them.
+    let mut rng = Rng(0x5eed);
+    let mut csv = String::with_capacity(m * 18 + 16);
+    csv.push_str("source,target\n");
+    for _ in 0..m {
+        let s = rng.next() % n;
+        let t = rng.next() % n;
+        csv.push_str(&format!("user_{s:07},user_{t:07}\n"));
+    }
+    let bytes = csv.as_bytes();
+
+    let start = Instant::now();
+    let mut ingest = EdgeIngest::new(IngestConfig::default(), n as usize);
+    for chunk in bytes.chunks(1 << 20) {
+        ingest.push_chunk(chunk);
+    }
+    let csv_secs = start.elapsed().as_secs_f64();
+    let out = ingest.finish();
+    assert_eq!(out.csr.edge_count(), m);
+    assert_eq!(out.csr.node_count(), node_count);
+    assert_eq!(out.skipped, 0);
+
     println!(
-        "{{\"nodes\":{},\"edges\":{},\"intern_secs\":{:.3},\"intern_meps\":{:.1},\"csr_secs\":{:.3},\"csr_meps\":{:.1}}}",
+        "{{\"nodes\":{},\"edges\":{},\"intern_secs\":{:.3},\"intern_meps\":{:.1},\"csr_secs\":{:.3},\"csr_meps\":{:.1},\"csv_secs\":{:.3},\"csv_mbps\":{:.1}}}",
         node_count,
         m,
         intern_secs,
         (2 * m) as f64 / intern_secs / 1e6,
         csr_secs,
         m as f64 / csr_secs / 1e6,
+        csv_secs,
+        bytes.len() as f64 / csv_secs / 1e6,
     );
 }

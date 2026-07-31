@@ -14,3 +14,6 @@ tests/playwright-report/
 # Bench results are committed deliberately, per-run scratch is not
 bench/results/*.tmp
 *.tsbuildinfo
+
+# wasm-pack output — regenerate with npm run build:wasm
+web/src/wasm-pkg/

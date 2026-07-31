@@ -1,0 +1,6 @@
+{
+  "fixture": "medium.csv",
+  "wallMs": 1950,
+  "usedJSHeapMB": 10,
+  "summaryText": "medium.csv — 1,000,000 nodes, 10,000,000 edges\n\nparse 1262 ms · build 58 ms · persist 59 ms — stored in this browser"
+}

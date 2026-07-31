@@ -64,3 +64,73 @@ h1 {
 .dropzone a {
   color: #9fb6ff;
 }
+
+.dropzone.dragover {
+  border-color: #9fb6ff;
+  background: #11131c;
+}
+
+.file-pick {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.4rem 1rem;
+  border: 1px solid #3a3f55;
+  border-radius: 8px;
+  color: #9fb6ff;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.progress,
+.summary {
+  margin-top: 1.5rem;
+}
+
+.progress progress {
+  width: 100%;
+  max-width: 420px;
+}
+
+.summary.error {
+  color: #ff9f9f;
+}
+
+.recent {
+  margin-top: 2rem;
+}
+
+.recent h2 {
+  font-size: 1rem;
+  color: #8a8fa3;
+}
+
+.recent ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.recent li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #1c1f2e;
+  font-size: 0.9rem;
+}
+
+.recent button {
+  border: 1px solid #3a3f55;
+  background: transparent;
+  color: #9fb6ff;
+  border-radius: 6px;
+  padding: 0.2rem 0.7rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.recent em {
+  color: #7fd4a3;
+  font-style: normal;
+  font-size: 0.85rem;
+}

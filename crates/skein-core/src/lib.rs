@@ -5,7 +5,11 @@
 //! per-node or per-edge heap objects.
 
 mod csr;
+mod csv;
+mod ingest;
 mod interner;
 
 pub use csr::Csr;
+pub use csv::CsvScanner;
+pub use ingest::{EdgeIngest, IngestConfig, IngestOutput};
 pub use interner::Interner;

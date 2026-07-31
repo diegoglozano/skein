@@ -21,10 +21,25 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   Metrics + screenshots in `bench/results/`, harness in
   `tests/manual-spike.mjs`. We build our own renderer/sim per §4–§6; M2/M3
   are unblocked but need a written renderer plan before code.
-- **M1 — next up:** streaming CSV parse in WASM, batch ingest entry points on
-  `skein-wasm::IngestSession` (the per-edge path is a placeholder), ingest
-  worker, OPFS persistence, ingest benchmarks in CI.
-- **M2–M5:** not started; see §11. M2/M3 are our own renderer + multilevel
+- **M1 — done (2026-07-31).** Streaming CSV scanner + `EdgeIngest` in
+  `skein-core` (chunk-safe quotes/CRLF, header capture, skipped-row
+  accounting); batch `push_chunk`/`finish` on `skein-wasm::IngestSession`;
+  ingest worker streams `File.stream()` through WASM and persists
+  CSR + dictionary to OPFS (`web/src/workers/`, formats in `opfs.ts`);
+  drop-zone UI with stage progress and a recent-graphs list backed by OPFS.
+  Real-hardware numbers (M3 Air, `bench/results/ingest-medium_csv-*.json`):
+  152 MB / 10M-edge CSV ingests in ~2 s wall — parse 1.3 s, CSR 0.06 s,
+  OPFS 0.06 s — 30× under the §9 60 s budget. Native CSV bench added to the
+  D5 ratio gate (`csv_secs`; enters the baseline at the next deliberate
+  refresh). The privacy gate now runs the full ingest pipeline under load.
+  `npm run build:wasm` (wasm-pack) is required before dev/build; CI installs
+  it via taiki-e/install-action.
+- **M2 — next up:** our own render path per D7 (instanced nodes + edge
+  segments from flat buffers, WebGPU with WebGL2 fallback), driven by
+  precomputed coordinates at 1M/10M. Buffers come back from the worker via
+  transfer — the protocol deliberately keeps them in the worker until M2
+  defines what the render path needs.
+- **M3–M5:** not started; see §11. M2/M3 are our own renderer + multilevel
   GPU layout per D7, not cosmos.gl integration.
 
 M0 facts worth keeping: headless Chromium falls back to SwiftShader even on
