@@ -115,6 +115,7 @@ npm run test -w tests            # privacy gate + spike (needs fixtures + built 
 cargo run -p skein -- --web-root web/dist        # the shippable binary (D10)
 cargo run --release --example bench | node bench/compare-bench.mjs   # ratio gate
 cargo run --release --example layout_tune    # force-param calibration (separation metrics)
+node tests/manual-demo.mjs clustered.csv     # re-record the README GIF (headed; ffmpeg)
 ```
 
 In managed/remote environments, point Playwright at the pre-installed browser:
