@@ -6,6 +6,15 @@ members = ["crates/skein-cli", "crates/skein-core", "crates/skein-wasm"]
 lto = "thin"
 opt-level = 3
 
+# The profile `dist` builds release artifacts with. Required: dist always
+# invokes `cargo build --profile dist`, so without this section every release
+# build fails with "profile `dist` is not defined". `dist init` writes this
+# normally; dist-workspace.toml was hand-written here, which is how it went
+# missing and broke the v0.1.0 tag.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
