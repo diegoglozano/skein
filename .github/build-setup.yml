@@ -1,6 +1,11 @@
 # Injected into dist's generated release workflow (dist-workspace.toml:
 # github-build-setup), ahead of the cargo build on every target runner.
 #
+# This is a list of steps, not a workflow, so it must NOT live in
+# .github/workflows/ — GitHub parses every .yml there as a workflow and this one
+# fails that parse, hanging a red "invalid workflow file" X on every push. It
+# sits one directory up instead, reached by the `../` in github-build-setup.
+#
 # skein-cli's build.rs bakes web/dist into the binary. web/dist is produced by
 # wasm-pack + vite, which cargo knows nothing about — so without these steps a
 # release build succeeds and ships a binary that refuses to serve anything.

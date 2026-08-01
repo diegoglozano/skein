@@ -48,14 +48,7 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
         working-directory: tests
-      # Privacy gate (§7) + functional spike run on the tiny fixture.
+      # Privacy gate (§7) + the app suite on the tiny fixture. The M0 cosmos.gl
+      # spike is opt-in (`npm run spike -w tests`) — D7 is decided and
       # SwiftShader numbers are not performance evidence (D3/D5).
       - run: npm run test -w tests
-        env:
-          SPIKE_SIM_CAP_MS: "30000"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: spike-metrics
-          path: bench/results/
-          if-no-files-found: ignore
