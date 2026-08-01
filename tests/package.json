@@ -6,7 +6,7 @@
   "scripts": {
     "test": "playwright test",
     "test:privacy": "playwright test no-network",
-    "spike": "playwright test spike --timeout 900000"
+    "spike": "SKEIN_SPIKE=1 playwright test spike --timeout 900000"
   },
   "devDependencies": {
     "@playwright/test": "^1.53.0"

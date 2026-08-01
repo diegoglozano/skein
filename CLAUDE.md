@@ -13,7 +13,7 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   a dev container); `skein-wasm` boundary compiles for wasm32; web shell with
   privacy badge + build-time CSP; deterministic fixture generator; Playwright
   no-network privacy gate (passing); CI (fmt/clippy/tests/wasm32/bench-ratio +
-  build/privacy/spike).
+  build/privacy/app-suite).
 - **M0 — done, verdict: build (DECISIONS.md D7).** The 1M/10M spike ran
   2026-07-31 on the reference laptop (M3 MacBook Air, real GPU, headed
   Chromium) and failed all three D3 thresholds: 64 sim ticks in 120 s /
@@ -131,7 +131,8 @@ cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
 npm run fixtures                 # tiny + small fixtures (gitignored, required for tests)
 npm run dev                      # app :5173, spike at /spike.html?fixture=tiny
 npm run build -w web             # typecheck + production build (CSP injected here only)
-npm run test -w tests            # privacy gate + spike (needs fixtures + built web)
+npm run test -w tests            # privacy gate + app suite (needs fixtures + built web)
+npm run spike -w tests           # M0 cosmos.gl spike; opt-in, not run by CI
 cargo run -p skein -- --web-root web/dist        # the shippable binary (D10)
 cargo run --release --example bench | node bench/compare-bench.mjs   # ratio gate
 cargo run --release --example layout_tune    # force-param calibration (separation metrics)
