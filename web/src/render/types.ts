@@ -7,8 +7,30 @@ export interface RenderGraph {
   edgeCount: number;
   /** World-space xy, length 2 * nodeCount. */
   positions: Float32Array;
-  /** Endpoint node indices, interleaved [s0, t0, s1, t1, ...], length 2 * edgeCount. */
+  /**
+   * Endpoint node indices, interleaved [s0, t0, s1, t1, ...], length
+   * 2 * edgeCount. Pre-shuffled with a seeded permutation, so any prefix is an
+   * unbiased sample (D8) — see `lod.ts`.
+   */
   endpoints: Uint32Array;
+  /**
+   * Node indices in draw order, length nodeCount: a seeded permutation, for
+   * the same prefix-is-a-sample reason as `endpoints`. The node pass reads
+   * positions through it rather than by instance index.
+   */
+  nodeOrder: Uint32Array;
+}
+
+/**
+ * How much of the graph to submit this frame; see `lod.ts`. The highlight
+ * overlay is exempt — a selected or hovered node must stay on screen even when
+ * the sample would have dropped it.
+ */
+export interface DrawLimits {
+  /** Nodes to draw, as a prefix of `nodeOrder`. Undefined draws all. */
+  nodeLimit?: number;
+  /** Edges to draw, as a prefix of `endpoints`. Undefined draws all. */
+  edgeLimit?: number;
 }
 
 /** World→clip mapping plus device info, computed by the camera per frame. */
@@ -49,11 +71,12 @@ export interface Renderer {
    */
   positionsGpuBuffer?(): GPUBuffer | null;
   /**
-   * Draw one frame. `edgeLimit` caps how many edges are drawn (a prefix of
-   * the uploaded endpoint buffer — pre-shuffle it with a seeded permutation
-   * for an unbiased sample). Undefined draws all edges.
+   * Draw one frame. `limits` caps how much of the graph is submitted; both
+   * caps are prefixes of the pre-shuffled buffers, so a capped frame is an
+   * unbiased sample rather than a corner of the data. Omitted draws
+   * everything.
    */
-  render(view: ViewTransform, edgeLimit?: number): void;
+  render(view: ViewTransform, limits?: DrawLimits): void;
   /** Resize the drawing buffer to device pixels. */
   resize(widthPx: number, heightPx: number): void;
   dispose(): void;

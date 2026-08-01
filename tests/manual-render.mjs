@@ -2,6 +2,13 @@
 // open the graph view, run scripted pan/zoom, and record fps from the
 // __skeinRender hook. Run HEADED — headless GL is SwiftShader (D3/D5).
 // Usage: node manual-render.mjs [fixture.csv] [seconds]   (preview on :4173)
+//
+// Also sweeps zoom levels and reports fps against the draw budget at each one
+// (D13). That table is the calibration input for DEFAULT_BUDGET in
+// web/src/render/lod.ts: `nodes` and `edges` are the on-screen counts the fit
+// view can hold at the target frame rate, and `maxEdges` is where a deep-zoom
+// frame stops being fill-bound and starts being vertex-bound — visible here as
+// fps falling while the on-screen count is still tiny.
 import { chromium } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -65,6 +72,29 @@ while (Date.now() < deadline) {
   i++;
 }
 
+// Zoom sweep: hold a camera, let fps settle, record what the budget spent.
+// Steps are cumulative wheel notches from the fit view; the last one returns
+// to it so a drifted camera cannot be mistaken for a budget effect.
+const zoomLevels = [];
+for (const notches of [0, 2, 4, 6, 8, -8]) {
+  await page.mouse.move(cx, cy);
+  for (let n = 0; n < Math.abs(notches); n++) {
+    await page.mouse.wheel(0, notches > 0 ? -600 : 600);
+  }
+  // Two full fps windows: the first is polluted by the frames spent zooming.
+  await page.waitForTimeout(2200);
+  const at = await page.evaluate(() => {
+    const s = window.__skeinRender;
+    return {
+      fps: s.fps,
+      drawnNodes: s.drawnNodes,
+      drawnEdges: s.drawnEdges,
+      visibleFraction: s.visibleFraction,
+    };
+  });
+  zoomLevels.push({ notches, ...at, onScreenEdges: Math.round(at.drawnEdges * at.visibleFraction) });
+}
+
 const stats = await page.evaluate(() => window.__skeinRender);
 const heap = await page.evaluate(() => {
   const m = performance.memory;
@@ -80,6 +110,7 @@ const result = {
   fpsSamples,
   fpsMin: sorted[0],
   fpsMedian: sorted[Math.floor(sorted.length / 2)],
+  zoomLevels,
   usedJSHeapMB: heap,
 };
 

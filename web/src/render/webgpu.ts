@@ -3,7 +3,7 @@
 // endpoints once, zero expansion or per-frame uploads. Nodes are instanced
 // quads; edges are a line-list drawn straight from the endpoint indices.
 
-import type { RenderGraph, Renderer, ViewTransform } from './types';
+import type { DrawLimits, RenderGraph, Renderer, ViewTransform } from './types';
 
 const SHADER = /* wgsl */ `
 struct View {
@@ -21,6 +21,10 @@ struct View {
 // selected neighbourhood. Drawn after the base passes.
 @group(0) @binding(3) var<storage, read> hiNodes: array<u32>;
 @group(0) @binding(4) var<storage, read> hiEdges: array<u32>;
+// Seeded node draw order (D13): the base node pass reads positions through
+// this, so capping the instance count samples the graph instead of slicing off
+// whatever the interner numbered last.
+@group(0) @binding(5) var<storage, read> nodeOrder: array<u32>;
 
 fn toClip(world: vec2f) -> vec2f {
   return world * view.scale + view.offset;
@@ -34,7 +38,7 @@ struct VsOut {
 @vertex
 fn nodeVs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut {
   let corner = vec2f(f32(vi & 1u), f32(vi >> 1u)) * 2.0 - 1.0;
-  let clip = toClip(positions[ii]) + corner * view.pointSizePx / view.viewportPx;
+  let clip = toClip(positions[nodeOrder[ii]]) + corner * view.pointSizePx / view.viewportPx;
   var out: VsOut;
   out.pos = vec4f(clip, 0.0, 1.0);
   out.color = vec4f(0.85, 0.87, 0.95, 0.9);
@@ -110,6 +114,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
     ],
   });
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] });
@@ -147,6 +152,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
 
   let positionsBuf: GPUBuffer | null = null;
   let endpointsBuf: GPUBuffer | null = null;
+  let nodeOrderBuf: GPUBuffer | null = null;
   let bindGroup: GPUBindGroup | null = null;
   let nodeCount = 0;
   let edgeCount = 0;
@@ -165,7 +171,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
   let hiEdgeCount = 0;
 
   const rebuildBindGroup = () => {
-    if (!positionsBuf || !endpointsBuf) return;
+    if (!positionsBuf || !endpointsBuf || !nodeOrderBuf) return;
     bindGroup = device.createBindGroup({
       layout,
       entries: [
@@ -174,6 +180,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
         { binding: 2, resource: { buffer: endpointsBuf } },
         { binding: 3, resource: { buffer: hiNodesBuf } },
         { binding: 4, resource: { buffer: hiEdgesBuf } },
+        { binding: 5, resource: { buffer: nodeOrderBuf } },
       ],
     });
   };
@@ -195,6 +202,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
     setGraph(graph: RenderGraph) {
       positionsBuf?.destroy();
       endpointsBuf?.destroy();
+      nodeOrderBuf?.destroy();
       nodeCount = graph.nodeCount;
       edgeCount = graph.edgeCount;
 
@@ -209,6 +217,11 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       });
       device.queue.writeBuffer(endpointsBuf, 0, graph.endpoints as Uint32Array<ArrayBuffer>);
+      nodeOrderBuf = device.createBuffer({
+        size: Math.max(4, graph.nodeOrder.byteLength),
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+      device.queue.writeBuffer(nodeOrderBuf, 0, graph.nodeOrder as Uint32Array<ArrayBuffer>);
 
       hiNodeCount = 0;
       hiEdgeCount = 0;
@@ -238,9 +251,10 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
       }
     },
 
-    render(view: ViewTransform, edgeLimit?: number) {
+    render(view: ViewTransform, limits?: DrawLimits) {
       if (!bindGroup) return;
-      const drawnEdges = Math.min(edgeCount, edgeLimit ?? edgeCount);
+      const drawnEdges = Math.min(edgeCount, limits?.edgeLimit ?? edgeCount);
+      const drawnNodes = Math.min(nodeCount, limits?.nodeLimit ?? nodeCount);
       uniformData.set([
         view.scaleX,
         view.scaleY,
@@ -270,7 +284,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
         pass.draw(2 * drawnEdges);
       }
       pass.setPipeline(nodePipeline);
-      pass.draw(4, nodeCount);
+      pass.draw(4, drawnNodes);
       if (hiEdgeCount > 0) {
         pass.setPipeline(hiEdgePipeline);
         pass.draw(2 * hiEdgeCount);
@@ -291,6 +305,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
     dispose() {
       positionsBuf?.destroy();
       endpointsBuf?.destroy();
+      nodeOrderBuf?.destroy();
       hiNodesBuf.destroy();
       hiEdgesBuf.destroy();
       uniform.destroy();

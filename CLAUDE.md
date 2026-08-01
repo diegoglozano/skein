@@ -113,8 +113,25 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   by column (D4 two-file ingest). That half carries §13's bundle-size question
   and needs a privacy decision first: DuckDB-WASM resolves its bundles from a
   CDN by default and must be fully self-hosted to hold §7.
-  Also still open: raise the D8 edge cap (post-layout headroom), and the D9
-  banding artifact if it bothers real datasets.
+  Also still open: the D9 banding artifact if it bothers real datasets.
+- **Post-M4 — draw budget follows zoom (D13, 2026-08-01).** Answers D8's
+  "raise the cap once positions are no longer random", and answers it as
+  *adaptive* rather than higher. Neither renderer culls, so vertex work is
+  constant at every zoom and only fill moves: the fit view is the most
+  expensive frame we draw and the fixed 300k cap was tuned for it, leaving
+  every zoomed-in frame under-spent. `web/src/render/lod.ts` now sizes the
+  seeded-prefix sample as `budget / f` with `f` the share of the graph in the
+  viewport, counted per frame off the M4 pick grid's cell prefix sums
+  (`visibleNodeCount`, O(rows)). Nodes are sampled too, through a new seeded
+  `nodeOrder` buffer in both renderers. The policy is a pure function of the
+  camera — deliberately not fps-driven, which would break D2 — and needs no
+  alpha compensation, since a constant on-screen count already holds density
+  constant. `tests/lod.spec.ts` gates it (needs the `small` fixture; CI now
+  generates it). **The budget numbers are not calibrated**: 300k edges is
+  D8's measured value carried over, 1M nodes is a no-op below §9's 5M tier,
+  and `maxEdges` 2M is a placeholder for where deep-zoom frames turn
+  vertex-bound. `tests/manual-render.mjs` now sweeps zoom levels to produce
+  those numbers on real hardware.
 - **M5:** not started; see §11 — distribution (D10) is already done.
 
 M0 facts worth keeping: headless Chromium falls back to SwiftShader even on

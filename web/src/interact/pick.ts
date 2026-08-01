@@ -97,6 +97,47 @@ export function buildPickIndex(positions: Float32Array): PickIndex {
 }
 
 /**
+ * How many nodes lie in the world-space rectangle — the zoom-adaptive draw
+ * budget's input (`render/lod.ts`), evaluated once per frame.
+ *
+ * Cells are laid out row-major and `cellNodes` is grouped by cell, so a
+ * contiguous column range within one row is a contiguous slice of `cellNodes`
+ * and costs one subtraction. That makes the whole query O(rows) — at most
+ * `MAX_CELLS_PER_AXIS` subtractions, regardless of node count, which is why
+ * this can run every frame on the main thread.
+ *
+ * Counts by cell, not by node: a cell straddling the viewport edge is counted
+ * whole. The overshoot is bounded by the boundary ring and it biases the
+ * budget toward drawing *less*, so it is the safe direction to be wrong in.
+ */
+export function visibleNodeCount(
+  index: PickIndex,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): number {
+  const { minX: ox, minY: oy, cellSize, cols, rows, cellStart } = index;
+  const lo = (v: number, cells: number) =>
+    Math.min(cells - 1, Math.max(0, Math.floor(v / cellSize)));
+  // A viewport entirely off one side of the grid would otherwise clamp to the
+  // edge row/column and report those nodes as visible.
+  if (maxX < ox || maxY < oy) return 0;
+  if (minX > ox + cols * cellSize || minY > oy + rows * cellSize) return 0;
+
+  const gx0 = lo(minX - ox, cols);
+  const gx1 = lo(maxX - ox, cols);
+  const gy0 = lo(minY - oy, rows);
+  const gy1 = lo(maxY - oy, rows);
+
+  let count = 0;
+  for (let gy = gy0; gy <= gy1; gy++) {
+    count += cellStart[gy * cols + gx1 + 1] - cellStart[gy * cols + gx0];
+  }
+  return count;
+}
+
+/**
  * Nearest node to (x, y) within `radius` world units, or -1. Ties break to the
  * lower node index so hover is deterministic (§6) rather than dependent on
  * scatter order.

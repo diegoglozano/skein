@@ -1,9 +1,10 @@
 // WebGL2 fallback (§8: not optional). Same flat buffers as the WebGPU path:
 // positions live in an RG32F texture indexed by texelFetch (GL2 has no vertex
 // storage buffers), edge endpoints are a plain uint vertex attribute, node
-// instances read their position by gl_InstanceID. No per-frame uploads.
+// instances read their position through the seeded draw order (D13). No
+// per-frame uploads.
 
-import type { RenderGraph, Renderer, ViewTransform } from './types';
+import type { DrawLimits, RenderGraph, Renderer, ViewTransform } from './types';
 
 /** Texture width for the position store; height grows with node count. */
 const TEX_W = 2048;
@@ -16,15 +17,19 @@ const POSITION_FETCH = /* glsl */ `
   }
 `;
 
+// `node` is the seeded draw order (D13), a per-instance attribute rather than
+// gl_InstanceID: capping the instance count then samples the graph instead of
+// dropping whatever the interner numbered last.
 const NODE_VS = /* glsl */ `#version 300 es
   uniform vec2 scale;
   uniform vec2 offset;
   uniform vec2 viewportPx;
   uniform float pointSizePx;
+  in highp uint node;
   ${POSITION_FETCH}
   void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
-    vec2 clip = fetchPosition(uint(gl_InstanceID)) * scale + offset
+    vec2 clip = fetchPosition(node) * scale + offset
       + corner * pointSizePx / viewportPx;
     gl_Position = vec4(clip, 0.0, 1.0);
   }
@@ -110,11 +115,13 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
   // rate, so don't re-query the driver for them there.
   const endpointLoc = gl.getAttribLocation(edgeProgram, 'endpoint');
   const hiNodeLoc = gl.getAttribLocation(hiNodeProgram, 'node');
+  const nodeOrderLoc = gl.getAttribLocation(nodeProgram, 'node');
 
   const positionTex = gl.createTexture();
   const endpointBuf = gl.createBuffer();
+  const nodeOrderBuf = gl.createBuffer();
   const edgeVao = gl.createVertexArray();
-  const nodeVao = gl.createVertexArray(); // attribute-less; VAO keeps state tidy
+  const nodeVao = gl.createVertexArray();
   const hiNodeBuf = gl.createBuffer();
   const hiEdgeBuf = gl.createBuffer();
   const hiNodeVao = gl.createVertexArray();
@@ -154,6 +161,14 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
       gl.vertexAttribIPointer(endpointLoc, 1, gl.UNSIGNED_INT, 0, 0);
       gl.bindVertexArray(null);
 
+      gl.bindVertexArray(nodeVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, nodeOrderBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, graph.nodeOrder, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(nodeOrderLoc);
+      gl.vertexAttribIPointer(nodeOrderLoc, 1, gl.UNSIGNED_INT, 0, 0);
+      gl.vertexAttribDivisor(nodeOrderLoc, 1); // one index per quad instance
+      gl.bindVertexArray(null);
+
       hiNodeCount = 0;
       hiEdgeCount = 0;
     },
@@ -178,9 +193,10 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
       gl.bindVertexArray(null);
     },
 
-    render(view: ViewTransform, edgeLimit?: number) {
+    render(view: ViewTransform, limits?: DrawLimits) {
       if (nodeCount === 0) return;
-      const drawnEdges = Math.min(edgeCount, edgeLimit ?? edgeCount);
+      const drawnEdges = Math.min(edgeCount, limits?.edgeLimit ?? edgeCount);
+      const drawnNodes = Math.min(nodeCount, limits?.nodeLimit ?? nodeCount);
       gl.viewport(0, 0, view.widthPx, view.heightPx);
       gl.clearColor(0.043, 0.043, 0.07, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
@@ -209,7 +225,7 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
       gl.uniform4f(nodeU.color, 0.85, 0.87, 0.95, 0.9);
       gl.uniform1i(nodeU.positions, 0);
       gl.bindVertexArray(nodeVao);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nodeCount);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, drawnNodes);
       gl.bindVertexArray(null);
 
       if (hiEdgeCount > 0) {
@@ -244,6 +260,7 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
     dispose() {
       gl.deleteTexture(positionTex);
       gl.deleteBuffer(endpointBuf);
+      gl.deleteBuffer(nodeOrderBuf);
       gl.deleteBuffer(hiNodeBuf);
       gl.deleteBuffer(hiEdgeBuf);
       gl.deleteVertexArray(edgeVao);
