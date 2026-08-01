@@ -9,10 +9,20 @@
 // ⇒ same picture.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, createRenderer, type RenderGraph, type Renderer } from '../render';
+import {
+  Camera,
+  createRenderer,
+  lodLimits,
+  shuffleEdgePairs,
+  shuffledOrder,
+  type DrawLimits,
+  type RenderGraph,
+  type Renderer,
+  type ViewTransform,
+} from '../render';
 import { multilevelLayout } from '../layout/multilevel';
 import { WORLD_SIZE, mulberry32, type LayoutProgress } from '../layout/params';
-import { buildPickIndex, pickNode, type PickIndex } from '../interact/pick';
+import { buildPickIndex, pickNode, visibleNodeCount, type PickIndex } from '../interact/pick';
 import { nodeId, searchNodes, type SearchHit } from '../interact/search';
 import type {
   FromWorker,
@@ -22,11 +32,6 @@ import type {
 } from '../workers/protocol';
 
 export const DEFAULT_SEED = 42;
-
-// Fill-rate budget (DECISIONS.md D8): pre-layout random positions made 10M
-// full-length edges cost billions of blended fragments; post-layout edges are
-// short, but the cap stays until re-measured. Sample is a seeded permutation.
-const EDGE_DRAW_CAP = 300_000;
 
 /** Cursor slack for hit-testing, in CSS pixels. */
 const PICK_RADIUS_PX = 12;
@@ -40,21 +45,6 @@ function seededScatter(n: number, seed: number): Float32Array {
   const xy = new Float32Array(2 * n);
   for (let i = 0; i < 2 * n; i++) xy[i] = rand() * WORLD_SIZE;
   return xy;
-}
-
-/** In-place seeded Fisher–Yates over endpoint pairs; one flat pass. */
-function shuffleEdgePairs(endpoints: Uint32Array, seed: number): void {
-  const rand = mulberry32(seed);
-  const m = endpoints.length >> 1;
-  for (let i = m - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    const si = endpoints[2 * i];
-    const ti = endpoints[2 * i + 1];
-    endpoints[2 * i] = endpoints[2 * j];
-    endpoints[2 * i + 1] = endpoints[2 * j + 1];
-    endpoints[2 * j] = si;
-    endpoints[2 * j + 1] = ti;
-  }
 }
 
 /** FNV-1a over the position bytes — the determinism test hook. */
@@ -84,6 +74,11 @@ interface RenderStats {
   pickMs: number | null;
   searchMs: number | null;
   neighborsMs: number | null;
+  /** Zoom-adaptive draw budget (D13), as of the last frame. */
+  drawnNodes: number;
+  drawnEdges: number;
+  /** Share of the graph inside the viewport; 1 until the pick index exists. */
+  visibleFraction: number;
 }
 
 declare global {
@@ -144,6 +139,8 @@ export function GraphView({ graph, name, worker, onClose }: {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [backend, setBackend] = useState<string>('starting…');
   const [fps, setFps] = useState(0);
+  /** Last sampled draw budget (D13); null until the first fps tick. */
+  const [drawn, setDrawn] = useState<{ nodes: number; edges: number } | null>(null);
   const [seed, setSeed] = useState(DEFAULT_SEED);
   const [seedInput, setSeedInput] = useState(String(DEFAULT_SEED));
   const [layoutState, setLayoutState] = useState('starting…');
@@ -181,6 +178,7 @@ export function GraphView({ graph, name, worker, onClose }: {
   useEffect(() => {
     const canvas = canvasRef.current!;
     const camera = new Camera();
+    setDrawn(null);
     let disposed = false;
     let raf = 0;
     let renderer: Renderer | null = null;
@@ -204,6 +202,9 @@ export function GraphView({ graph, name, worker, onClose }: {
       pickMs: null,
       searchMs: null,
       neighborsMs: null,
+      drawnNodes: graph.nodeCount,
+      drawnEdges: graph.edgeCount,
+      visibleFraction: 1,
     };
     window.__skeinRender = stats;
     const setLayout = (s: string) => {
@@ -221,12 +222,15 @@ export function GraphView({ graph, name, worker, onClose }: {
       setBackend(renderer.backend);
       stats.backend = renderer.backend;
 
+      // Both buffers are permuted so that any prefix of them is an unbiased
+      // sample — that is what lets the frame loop below cap them by zoom.
       shuffleEdgePairs(graph.endpoints, seed);
       const renderGraph: RenderGraph = {
         nodeCount: graph.nodeCount,
         edgeCount: graph.edgeCount,
         positions: seededScatter(graph.nodeCount, seed),
         endpoints: graph.endpoints,
+        nodeOrder: shuffledOrder(graph.nodeCount, seed),
       };
       renderer.setGraph(renderGraph);
 
@@ -421,17 +425,52 @@ export function GraphView({ graph, name, worker, onClose }: {
         canvas.removeEventListener('wheel', onWheel);
       });
 
+      /**
+       * How much of the graph to submit this frame (D13). A pure function of
+       * the camera and the pick grid — deliberately not of the measured fps,
+       * which would make the picture depend on machine load and break §6's
+       * "same file + seed + machine + browser ⇒ same picture".
+       *
+       * Before the layout settles there is no pick index, so this reports the
+       * whole graph as visible and the limits collapse to D8's fixed caps.
+       */
+      const drawLimits = (view: ViewTransform): DrawLimits => {
+        let fraction = 1;
+        if (pickIndex) {
+          const a = camera.worldAt(0, 0);
+          const b = camera.worldAt(view.widthPx, view.heightPx);
+          const visible = visibleNodeCount(
+            pickIndex,
+            Math.min(a.x, b.x),
+            Math.min(a.y, b.y),
+            Math.max(a.x, b.x),
+            Math.max(a.y, b.y),
+          );
+          fraction = visible / graph.nodeCount;
+        }
+        stats.visibleFraction = fraction;
+        const limits = lodLimits(graph.nodeCount, graph.edgeCount, fraction);
+        stats.drawnNodes = limits.nodeLimit;
+        stats.drawnEdges = limits.edgeLimit;
+        return limits;
+      };
+
       let windowStart = performance.now();
       let windowFrames = 0;
       const frame = () => {
         if (disposed) return;
-        renderer!.render(camera.view(2.5 * dpr), EDGE_DRAW_CAP);
+        const view = camera.view(2.5 * dpr);
+        renderer!.render(view, drawLimits(view));
         stats.frames++;
         windowFrames++;
         const now = performance.now();
         if (now - windowStart >= 1000) {
           stats.fps = Math.round((windowFrames * 10000) / (now - windowStart)) / 10;
           setFps(stats.fps);
+          // The drawn counts move every frame; publishing them to React at
+          // that rate would re-render the whole panel on each one. The HUD
+          // rides the existing once-a-second fps tick instead.
+          setDrawn({ nodes: stats.drawnNodes, edges: stats.drawnEdges });
           windowFrames = 0;
           windowStart = now;
         }
@@ -582,8 +621,13 @@ export function GraphView({ graph, name, worker, onClose }: {
         <span>
           <strong>{name}</strong> — {graph.nodeCount.toLocaleString()} nodes,{' '}
           {graph.edgeCount.toLocaleString()} edges
-          {graph.edgeCount > EDGE_DRAW_CAP &&
-            ` (drawing a seeded ${EDGE_DRAW_CAP.toLocaleString()}-edge sample)`}
+          {drawn && (drawn.edges < graph.edgeCount || drawn.nodes < graph.nodeCount) && (
+            <span data-testid="draw-sample">
+              {' '}
+              (drawing a seeded sample: {drawn.edges.toLocaleString()} edges,{' '}
+              {drawn.nodes.toLocaleString()} nodes — zoom in for more)
+            </span>
+          )}
         </span>
         <span data-testid="render-backend">renderer: {backend}</span>
         <span data-testid="layout-status">layout: {layoutState}</span>

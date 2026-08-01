@@ -50,7 +50,7 @@ export default defineConfig({
     },
     {
       name: 'app',
-      testMatch: /(ingest|layout|layout-fallback|explore)\.spec\.ts/,
+      testMatch: /(ingest|layout|layout-fallback|explore|lod)\.spec\.ts/,
       use: { baseURL: `http://localhost:${PREVIEW_PORT}` },
     },
     ...(spike

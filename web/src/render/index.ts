@@ -6,8 +6,15 @@ import type { Renderer } from './types';
 import { createWebGpuRenderer } from './webgpu';
 import { createWebGl2Renderer } from './webgl2';
 
-export type { Backend, RenderGraph, Renderer, ViewTransform } from './types';
+export type { Backend, DrawLimits, RenderGraph, Renderer, ViewTransform } from './types';
 export { Camera } from './camera';
+export {
+  DEFAULT_BUDGET,
+  lodLimits,
+  shuffleEdgePairs,
+  shuffledOrder,
+  type LodBudget,
+} from './lod';
 
 export async function createRenderer(canvas: HTMLCanvasElement): Promise<Renderer> {
   try {

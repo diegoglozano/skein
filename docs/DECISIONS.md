@@ -453,3 +453,76 @@ fix is an n-gram index over the same bytes, not per-node JS strings); or a hub
 selection makes the 30.8 ms reverse scan visible, which would justify building
 the reverse CSR once per graph — it is one O(n+m) pass, so it pays for itself
 after a single extra click if the memory is ever affordable.
+
+## D13 — The draw budget follows zoom: hold on-screen primitives constant (post-M4)
+
+Reported as a feel: "the layout is way faster when I zoom in — probably because
+we're drawing fewer nodes/edges." Half right, and the half that is wrong is
+the useful half.
+
+We are not drawing fewer of anything. Neither renderer culls: every frame
+submits `nodeCount` instances and `min(edgeCount, cap)` line vertices no matter
+where the camera is, so vertex work is *constant* across zoom levels. What
+changes is fill. At the fit view every primitive lands on screen at once —
+1M node quads at a fixed 2.5·dpr px plus the edge sample, all alpha-blended
+over each other — and D8 already measured that this, not vertex rate, is what
+costs. Zoomed in, the rasterizer discards nearly everything after the vertex
+shader and the fragment cost collapses. The fit view is the most expensive
+frame the app ever draws, and it is the one we tuned the cap for.
+
+So the cap was answering the wrong question. A constant 300k prefix is the
+number the *worst* frame can afford; every other frame was under-spending it.
+
+**Decision:** the sample size becomes a function of the camera — draw
+`budget / f` primitives, where `f` is the fraction of the graph inside the
+viewport, clamped to the graph size and to a vertex-work ceiling. At the fit
+view `f = 1` and this is D8's cap exactly, so nothing regresses; zoomed in it
+spends the headroom that was being reserved for a frame we are not drawing.
+One knob, both directions. Node counts get the same treatment, which needs a
+seeded node-order buffer (a prefix of *index* order is not a sample: interner
+order is CSV first-seen order, and in a preferential-attachment graph the low
+indices are the hubs).
+
+`f` comes from the M4 pick grid, which already stores per-cell prefix sums:
+counting the nodes in a world-space rectangle is one subtraction per visible
+grid row, ≤1024 of them, so it runs per frame on the main thread. The obvious
+cheaper estimate — viewport area over bounding-box area — is wrong in exactly
+the place it matters: a force layout concentrates mass in cluster cores, so it
+under-estimates `f` when zooming into a dense core and would overshoot the
+budget precisely there.
+
+**Two properties this must not lose.**
+
+- *Purity.* The natural way to write adaptive quality is an fps feedback loop.
+  That would make the rendered image depend on machine load and frame history,
+  and §6/D2 promise the opposite: same file + seed + machine + browser ⇒ same
+  picture. Nothing in the policy reads a clock, and for the same reason there
+  is no temporal smoothing of `f`. `tests/lod.spec.ts` reads the budget twice
+  at a fixed camera and requires bit-identical answers.
+- *No alpha compensation.* Holding the on-screen count constant already holds
+  apparent density constant — zooming in shrinks the viewport and raises the
+  sample rate together, so primitives entering at the sample boundary replace
+  ones leaving at the viewport edge. Scaling alpha by the sample fraction on
+  top of that double-corrects and makes the picture pulse while zooming.
+
+**The ceiling is the honest part.** Sampling is uniform over the whole graph,
+so drawing every edge inside a small viewport means submitting every edge in
+the file, and clipping happens after the vertex shader — those vertices still
+pay their position fetch. Past some point a deep-zoom frame stops being
+fill-bound and becomes vertex-bound, which no sampling policy can fix. That is
+what `maxEdges` marks. Beyond it the answer is real culling — a spatial index
+over the settled layout feeding an indirect draw — which is strictly more work
+for the case that is already fast, and is why it is not in this change.
+
+**Not yet calibrated.** `DEFAULT_BUDGET` keeps D8's measured 300k edges (so
+fit-view behaviour is unchanged and un-regressed), sets the node budget to 1M
+(a no-op at §9's 1M tier, active at 5M) and `maxEdges` to 2M, which is a
+placeholder, not a measurement. `tests/manual-render.mjs` now sweeps zoom
+levels and reports fps against the on-screen count at each one; those three
+numbers should come from a headed run on the reference laptop before any of
+them is quoted (D5).
+
+**Revisit if:** a deep-zoom frame turns out to be vertex-bound below the 2M
+ceiling (then culling stops being optional); or the node budget starts thinning
+pictures that used to be solid, which would mean the fixed 2.5 px point size,
+not the count, is what needs to move.
