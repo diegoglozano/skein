@@ -1,6 +1,12 @@
 # Injected into dist's generated release workflow (dist-workspace.toml:
 # github-build-setup), ahead of the cargo build on every target runner.
 #
+# This is a bare list of steps, not a workflow: no `on:`, no `jobs:`. That is
+# why it sits in .github/ and not .github/workflows/ — GitHub runs everything in
+# the workflows directory, and it failed this file on every push to every branch
+# until it was moved. dist resolves the path relative to .github/workflows/,
+# which is where the "../" in dist-workspace.toml comes from.
+#
 # skein-cli's build.rs bakes web/dist into the binary. web/dist is produced by
 # wasm-pack + vite, which cargo knows nothing about — so without these steps a
 # release build succeeds and ships a binary that refuses to serve anything.

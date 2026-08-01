@@ -20,6 +20,19 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo check -p skein-wasm --target wasm32-unknown-unknown
+      # Every file in .github/workflows/ must be a real workflow. dist's
+      # build-setup snippet is a bare list of steps; it lived here once and
+      # GitHub failed it on every push to every branch for eight pushes before
+      # anyone read the red X. A fragment belongs in .github/, not workflows/.
+      - name: Workflows are workflows
+        run: |
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -e "$f" ] || continue
+            grep -qE '^(on|"on"|true):' "$f" || {
+              echo "::error file=$f::no 'on:' trigger — a workflow fragment must live outside .github/workflows/"
+              exit 1
+            }
+          done
       # Regression-ratio gate (docs/DECISIONS.md D5). Warn-only until the
       # baseline has been regenerated on this runner class with --update.
       - run: cargo run --release --example bench | node bench/compare-bench.mjs --warn-only

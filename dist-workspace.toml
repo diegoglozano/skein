@@ -25,7 +25,12 @@ github-attestations = true
 # The binary is only useful with web/dist compiled into it, and that is built by
 # npm, not cargo. This snippet runs the web build on every release runner before
 # cargo gets invoked. Without it dist would happily ship an assetless binary.
-github-build-setup = "build-setup.yml"
+#
+# The path is relative to .github/workflows/, and the "../" is load-bearing:
+# this file is a bare list of steps, not a workflow, so GitHub Actions picks it
+# up and fails it on every push if it sits in the workflows directory. Keep it
+# in .github/.
+github-build-setup = "../build-setup.yml"
 
 # Homebrew, as in revector, is deliberately not enabled yet: publishing to the
 # tap needs a HOMEBREW_TAP_TOKEN secret on this repo (a PAT with contents:write

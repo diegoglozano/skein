@@ -245,8 +245,10 @@ git tag v0.1.0 && git push origin v0.1.0
 ```
 
 `.github/workflows/release.yml` builds every target, runs the web build first via
-`.github/workflows/build-setup.yml` so the binary actually contains the app, and
-creates the GitHub Release with the installers attached. After changing
+`.github/build-setup.yml` so the binary actually contains the app, and creates
+the GitHub Release with the installers attached. That snippet lives outside
+`workflows/` on purpose — it is a bare list of steps rather than a workflow, so
+GitHub Actions would try to run it and fail on every push. After changing
 `dist-workspace.toml`, run `dist generate` and commit the regenerated workflow.
 
 If a release fails before the `host` job, no GitHub Release is created and the

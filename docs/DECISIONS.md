@@ -266,6 +266,17 @@ release build while leaving normal `cargo build` and the whole test suite green
 `dist build --artifacts=local/global` before tagging, which reproduces the
 failure locally in a minute.
 
+The same hand-written config cost a second, noisier failure: `build-setup.yml`
+was placed in `.github/workflows/`, but it is a bare list of steps with no `on:`
+and no `jobs:`. GitHub runs everything in that directory, so **every push to
+every branch produced a failed run** — eight in a row before anyone read the red
+X, which is the real damage: a permanently red history is indistinguishable from
+a broken one, so it stops being a signal. The file now lives in `.github/`
+(`github-build-setup = "../build-setup.yml"`, resolved relative to
+`.github/workflows/`; `dist generate` reproduces `release.yml` byte-identically
+from there), and `ci.yml` asserts that everything in `.github/workflows/` has an
+`on:` trigger, so the fragment cannot be moved back quietly.
+
 **Self-hosting is the same binary in a container** (`Dockerfile`, multi-stage:
 node+rust builder → debian-slim runtime, non-root). The caveat that matters:
 WebGPU and SharedArrayBuffer require a secure context, so an instance reached
