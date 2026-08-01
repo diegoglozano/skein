@@ -32,14 +32,29 @@ pub struct Config {
 
 pub fn handle(request: Request, config: &Config) -> std::io::Result<()> {
     let response = match *request.method() {
-        tiny_http::Method::Get | tiny_http::Method::Head => route(request.url(), config),
+        tiny_http::Method::Get | tiny_http::Method::Head => {
+            route(request.url(), accepts_brotli(&request), config)
+        }
         _ => text(405, "method not allowed"),
     };
     // tiny_http suppresses the body itself when the method is HEAD.
     request.respond(response)
 }
 
-fn route(url: &str, config: &Config) -> ResponseBox {
+/// Whether the client offered `br`. Assets are *stored* compressed (build.rs),
+/// so this decides whether they are sent as stored or decompressed first — not
+/// whether to compress. Deliberately a substring test rather than a q-value
+/// parser: `Accept-Encoding: br;q=0` is not a header any browser sends, and the
+/// cost of being wrong is a body the client rejects.
+fn accepts_brotli(request: &Request) -> bool {
+    request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Accept-Encoding"))
+        .is_some_and(|h| h.value.as_str().contains("br"))
+}
+
+fn route(url: &str, accepts_br: bool, config: &Config) -> ResponseBox {
     let path = url.split(['?', '#']).next().unwrap_or("");
     let path = path.trim_start_matches('/');
     let Some(path) = percent_decode(path) else {
@@ -60,9 +75,22 @@ fn route(url: &str, config: &Config) -> ResponseBox {
     // is being served.
     let path = normalize(&path);
     match config.assets.get(&path) {
-        Some(bytes) => {
+        Some(asset) => {
+            let compressed = asset.brotli && accepts_br;
+            let bytes = if compressed {
+                asset.bytes
+            } else {
+                asset.into_plain()
+            };
             let len = bytes.len();
-            let headers = common_headers(content_type(&path), cache_control(&path));
+            let mut headers = common_headers(content_type(&path), cache_control(&path));
+            // Vary regardless of what this response chose: the same URL can be
+            // answered either way, and a shared cache must not reuse one for
+            // the other.
+            push_header(&mut headers, "Vary", "Accept-Encoding");
+            if compressed {
+                push_header(&mut headers, "Content-Encoding", "br");
+            }
             Response::new(
                 StatusCode(200),
                 headers,
@@ -73,6 +101,12 @@ fn route(url: &str, config: &Config) -> ResponseBox {
             .boxed()
         }
         None => text(404, "not found"),
+    }
+}
+
+fn push_header(headers: &mut Vec<Header>, name: &str, value: &str) {
+    if let Ok(header) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
+        headers.push(header);
     }
 }
 
@@ -190,10 +224,13 @@ mod tests {
             assets: Assets::Dir(PathBuf::from("/tmp/skein-nonexistent")),
             fixtures: None,
         };
-        assert_eq!(route("/nope.js", &config).status_code(), StatusCode(404));
+        assert_eq!(
+            route("/nope.js", true, &config).status_code(),
+            StatusCode(404)
+        );
         // Query strings are stripped before lookup, not treated as part of the path.
         assert_eq!(
-            route("/nope.js?v=1", &config).status_code(),
+            route("/nope.js?v=1", true, &config).status_code(),
             StatusCode(404)
         );
     }
@@ -216,7 +253,7 @@ mod tests {
             fixtures: None,
         };
         assert_eq!(
-            route("/fixtures/tiny.bin", &config).status_code(),
+            route("/fixtures/tiny.bin", true, &config).status_code(),
             StatusCode(404)
         );
     }

@@ -236,7 +236,11 @@ License: **Apache-2.0** (matches cosmos.gl, permissive enough for corporate adop
   docs/DECISIONS.md D3.
 - Is DuckDB-WASM's bundle size (~30 MB wasm) acceptable for a tool that must work
   offline after first load? Measure; consider lazy-loading it only when metadata is
-  attached.
+  attached. → **Answered in M4, docs/DECISIONS.md D14.** Measured at 34 MB raw /
+  5.3 MB brotli for the one bundle we ship; kept, self-hosted, and loaded only
+  when the attributes panel is opened — which is enforced by a test, not
+  intended. The binary that embeds it got *smaller* (12 MB → 6.8 MB), because
+  the same change added build-time compression to everything it embeds.
 - Coarsening: label propagation is fast but low quality. Is Leiden worth the complexity
   in v1, or is it an M3+ refinement?
 - Edge rendering above ~20M edges: bundle, sample, or draw a density field? Sampling is

@@ -301,3 +301,199 @@ h1 {
 .explore .hint {
   line-height: 1.5;
 }
+
+/* Attributes panel (M4): attach, colour/size by column, filters. */
+.attributes {
+  border-top: 1px solid #1c1f2e;
+  padding-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.attributes h3 {
+  margin: 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8f93a8;
+}
+
+.attributes h4 {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  color: #8f93a8;
+  font-weight: 600;
+}
+
+.attributes > button,
+.attributes .file-pick.block {
+  border: 1px solid #3a3f55;
+  background: transparent;
+  color: #9fb6ff;
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  text-align: center;
+}
+
+.attributes label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.attributes select {
+  background: #11131c;
+  border: 1px solid #3a3f55;
+  color: #e6e6ea;
+  border-radius: 6px;
+  padding: 0.2rem 0.3rem;
+  max-width: 9rem;
+}
+
+.attributes code {
+  color: #e6e6ea;
+}
+
+.join-report p {
+  margin: 0 0 0.2rem;
+}
+
+/* The legend is not decoration: identity must never be colour alone. */
+.legend .ramp {
+  display: flex;
+  height: 0.6rem;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.legend .ramp span {
+  flex: 1;
+}
+
+.legend .ramp-labels {
+  display: flex;
+  justify-content: space-between;
+}
+
+.legend.swatches {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.legend.swatches li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+  flex: none;
+}
+
+.filters details {
+  border-top: 1px solid #14161f;
+  padding: 0.25rem 0;
+}
+
+.filters summary {
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.filters .range {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+}
+
+.filters .range input {
+  width: 50%;
+}
+
+.filters .values {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.filters .values li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.filters .values label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  justify-content: flex-start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sparkbars {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 2rem;
+  margin-top: 0.3rem;
+}
+
+.sparkbars span {
+  flex: 1;
+  background: #3987e5;
+  min-height: 1px;
+  border-radius: 1px 1px 0 0;
+}
+
+button.link {
+  border: none;
+  background: transparent;
+  color: #9fb6ff;
+  padding: 0.2rem 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.attr-card {
+  margin: 0;
+  border: 1px solid #1c1f2e;
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  background: #11131c;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.attr-card > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.attr-card dt {
+  color: #8f93a8;
+}
+
+.attr-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}

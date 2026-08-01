@@ -14,6 +14,13 @@ readme = "../../README.md"
 
 [dependencies]
 tiny_http = "0.12"
+# Serving, not compressing: the bundle is compressed at build time (build.rs).
+# This is here for the client that does not offer `br`, and for the round-trip
+# test on the embedded table.
+brotli = { version = "8", default-features = false, features = ["std"] }
+
+[build-dependencies]
+brotli = { version = "8", default-features = false, features = ["std"] }
 
 [package.metadata.dist]
 dist = true

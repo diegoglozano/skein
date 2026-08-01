@@ -16,6 +16,12 @@ export {
   shuffledOrder,
   type LodBudget,
 } from './lod';
+export {
+  HIDDEN_SIZE_CODE,
+  NEUTRAL_SIZE_CODE,
+  packStyle,
+  sizeCode,
+} from './style';
 
 export async function createRenderer(canvas: HTMLCanvasElement): Promise<Renderer> {
   try {

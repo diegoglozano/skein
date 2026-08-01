@@ -11,9 +11,11 @@ Unedited screen capture: a 20k-node / 120k-edge edge list ingested in 31 ms,
 laid out in 1.9 s, and panned and zoomed at 60 fps — on the reference M3
 MacBook Air, WebGPU on Metal. Recorded by `node tests/manual-demo.mjs`.
 
-**Status: M3 done, plus distribution.** Ingest, rendering, and deterministic
-multilevel layout all land at the 1M-node / 10M-edge tier, and the app ships as
-a single binary. M4 (attributes, filters, search) is next. See
+**Status: M4 done, plus distribution.** Ingest, rendering, deterministic
+multilevel layout, and the explore surface — hover, selection, 1-hop
+neighbourhoods, id search, and attribute-driven colour, size and filters — all
+land at the 1M-node / 10M-edge tier, and the app ships as a single binary. M5
+(compatibility matrix, docs, static deploy) is what is left. See
 [REQUIREMENTS.md](REQUIREMENTS.md) for the full brief and
 [docs/DECISIONS.md](docs/DECISIONS.md) for resolved design questions.
 
@@ -79,11 +81,29 @@ work. The graph is parsed to CSR and persisted to OPFS in your browser, which is
 why it shows up in the recent-graphs list on the next visit — and why clearing
 site data for the origin deletes it.
 
+### Attributes
+
+Attach a second CSV — node ids in one column, anything else alongside — and the
+sidebar can colour, size and filter by any of it. The join is reported honestly:
+how many nodes matched, how many rows matched nothing, how many duplicate keys
+were dropped. Without a second file you can still colour, size and filter by
+degree, which the graph already knows.
+
+This runs on DuckDB-WASM, and it is **not loaded until you open the panel** —
+it is a 5 MB one-time download, served from this origin like everything else,
+never from a CDN. The no-network test drives the whole attributes path, so that
+is enforced rather than intended (docs/DECISIONS.md D14).
+
+Colour uses three categorical hues and groups everything else into one neutral.
+That looks stingy and is deliberate: on a near-black canvas where any two
+categories can end up as neighbouring pixels, a fourth hue measurably stops
+being distinguishable — including for readers with full colour vision (D14a).
+Filter to compare the rest.
+
 Current limits, all deliberate and all on the roadmap: CSV only (Parquet/Arrow
-and a column-mapping dialog are §10), no attributes, search, or filters until M4
-(§11), and the canvas draws a seeded 300k-edge sample of larger graphs because
-edge rendering is fill-bound (docs/DECISIONS.md D8) — the HUD says when it is
-sampling.
+and a column-mapping dialog are §10), and the canvas draws a seeded 300k-edge
+sample of larger graphs because edge rendering is fill-bound
+(docs/DECISIONS.md D8) — the HUD says when it is sampling.
 
 ### Self-hosting
 

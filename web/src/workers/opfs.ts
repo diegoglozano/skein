@@ -76,6 +76,34 @@ export async function persistGraphBuffers(
   await writeFile(dir, 'dict.bin', [dictHeader, idOffsets, idBytes]);
 }
 
+/**
+ * The attached node-attributes file (M4), stored verbatim so the next session
+ * can hand the same bytes to DuckDB. Read back on the main thread — see
+ * `analytics/persist.ts`, which must agree with this name.
+ */
+const ATTRS_FILE = 'attrs.csv';
+
+/**
+ * Persist an attributes file and record it in the manifest. The manifest is
+ * rewritten last for the same reason `writeManifest` exists at all: a graph
+ * whose manifest claims an attributes file that was never fully written would
+ * fail to reopen.
+ */
+export async function saveAttributes(
+  id: string,
+  file: File,
+  joinColumn: string,
+): Promise<GraphSummary> {
+  const dir = await (await graphsDir()).getDirectoryHandle(id, { create: true });
+  await writeFile(dir, ATTRS_FILE, [await file.arrayBuffer()]);
+
+  const handle = await dir.getFileHandle('manifest.json');
+  const summary = JSON.parse(await (await handle.getFile()).text()) as GraphSummary;
+  summary.attributes = { fileName: file.name, joinColumn };
+  await writeManifest(id, summary);
+  return summary;
+}
+
 /** Written last: a graph without a manifest is treated as partial and ignored. */
 export async function writeManifest(id: string, summary: GraphSummary): Promise<void> {
   const dir = await (await graphsDir()).getDirectoryHandle(id, { create: true });

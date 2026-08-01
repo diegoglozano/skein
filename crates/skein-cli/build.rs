@@ -8,11 +8,24 @@
 // dist-workspace.toml).
 //
 // Generating a source file with `include_bytes!` rather than pulling in a
-// directory-embedding crate keeps the dependency tree to one crate, which
+// directory-embedding crate keeps the runtime dependency tree small, which
 // matters for a binary whose whole job is "be a single file".
+//
+// Assets above `COMPRESS_MIN` are brotli-compressed here and shipped
+// compressed. That is not a micro-optimisation: M4's DuckDB bundle is a 34 MB
+// wasm (DECISIONS.md D14), and embedding it raw took the binary from ~12 MB to
+// ~48 MB. Compressed it is ~5 MB, and browsers ask for `br` anyway, so the
+// bytes are usually served exactly as stored. Quality 9 rather than 11 —
+// 2 seconds and 5.3 MB, against a minute and 5.1 MB.
 
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
+
+/// Below this, compression costs a header and saves nothing worth having.
+const COMPRESS_MIN: usize = 4096;
+const BROTLI_QUALITY: i32 = 9;
+const BROTLI_WINDOW: i32 = 22;
 
 fn main() {
     let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
@@ -37,19 +50,43 @@ fn main() {
         );
     }
 
-    let mut out = String::from("pub static EMBEDDED: &[(&str, &[u8])] = &[\n");
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let compressed_dir = out_dir.join("br");
+    fs::create_dir_all(&compressed_dir).expect("create brotli output dir");
+
+    // Rows are (route, bytes, stored-as-brotli).
+    let mut out = String::from("pub static EMBEDDED: &[(&str, &[u8], bool)] = &[\n");
     for (route, file) in &assets {
         println!("cargo:rerun-if-changed={}", file.display());
+        let bytes = fs::read(file).expect("read asset");
+        let (path, brotli) = if bytes.len() >= COMPRESS_MIN {
+            let dest = compressed_dir.join(format!("{}.br", route.replace(['/', '\\'], "_")));
+            fs::write(&dest, compress(&bytes)).expect("write compressed asset");
+            (dest, true)
+        } else {
+            (file.clone(), false)
+        };
         out.push_str(&format!(
-            "    ({:?}, include_bytes!({:?})),\n",
+            "    ({:?}, include_bytes!({:?}), {}),\n",
             route,
-            file.display().to_string()
+            path.display().to_string(),
+            brotli
         ));
     }
     out.push_str("];\n");
 
-    let dest = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("embedded.rs");
-    fs::write(&dest, out).expect("write embedded.rs");
+    fs::write(out_dir.join("embedded.rs"), out).expect("write embedded.rs");
+}
+
+fn compress(data: &[u8]) -> Vec<u8> {
+    let params = brotli::enc::BrotliEncoderParams {
+        quality: BROTLI_QUALITY,
+        lgwin: BROTLI_WINDOW,
+        ..Default::default()
+    };
+    let mut out = Vec::new();
+    brotli::BrotliCompress(&mut Cursor::new(data), &mut out, &params).expect("brotli compress");
+    out
 }
 
 /// Walks `dir`, pushing (route, absolute path) pairs. Routes are `/`-joined and

@@ -37,6 +37,8 @@ export interface GraphSummary {
   weighted: boolean;
   header?: string[];
   timings?: { parseMs: number; buildMs: number; persistMs: number };
+  /** Set once a node-attributes file has been attached and persisted (M4). */
+  attributes?: { fileName: string; joinColumn: string };
 }
 
 export type ToWorker =
@@ -52,7 +54,13 @@ export type ToWorker =
   | { type: 'save-positions'; id: string; seed: number; positions: Float32Array }
   | { type: 'load-positions'; id: string; seed: number }
   /** 1-hop neighbourhood of `node`, both edge directions (M4 selection). */
-  | { type: 'neighbors'; id: string; node: number };
+  | { type: 'neighbors'; id: string; node: number }
+  /**
+   * Persist an attached node-attributes file next to the graph, so reopening
+   * it restores the join. The main thread hands DuckDB the same `File`
+   * directly; this copy is only for the next session (M4).
+   */
+  | { type: 'save-attributes'; id: string; file: File; joinColumn: string };
 
 /** One level of the §6 multilevel hierarchy; level 0 is the symmetrized
  * input. `parentMap` is absent on the coarsest level. */
@@ -98,6 +106,8 @@ export type FromWorker =
   | ({ type: 'layout-progress'; id: string; positions?: Float32Array } & LayoutProgress)
   | { type: 'layout-done'; id: string; seed: number; positions: Float32Array }
   | { type: 'positions-saved'; id: string }
+  /** The manifest now records the attached file; carries the fresh summary. */
+  | { type: 'attributes-saved'; id: string; graph: GraphSummary }
   | { type: 'positions'; id: string; seed: number; positions: Float32Array | null }
   /** `neighbors` is deduped and capped for display; `total` is the true count. */
   | { type: 'neighbors'; id: string; node: number; neighbors: Uint32Array; total: number }

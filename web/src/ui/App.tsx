@@ -35,9 +35,13 @@ export function App() {
   const [recent, setRecent] = useState<GraphSummary[]>([]);
   const [verifyResult, setVerifyResult] = useState<{ id: string; detail: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [viewing, setViewing] = useState<{ graph: LoadedGraph; name: string } | null>(null);
+  const [viewing, setViewing] = useState<{ graph: LoadedGraph; summary: GraphSummary } | null>(
+    null,
+  );
   const workerRef = useRef<Worker | null>(null);
-  const namesRef = useRef<Map<string, string>>(new Map());
+  // Summaries by id, so the view can be handed the manifest — the attributes
+  // panel needs to know whether a file was attached in a previous session.
+  const summariesRef = useRef<Map<string, GraphSummary>>(new Map());
 
   useEffect(() => {
     const worker = new Worker(new URL('../workers/ingest.ts', import.meta.url), {
@@ -56,16 +60,36 @@ export function App() {
           break;
         case 'graphs':
           setRecent(msg.graphs);
+          for (const g of msg.graphs) summariesRef.current.set(g.id, g);
+          break;
+        case 'attributes-saved':
+          // The manifest changed under the open view; keep the cached summary
+          // in step so closing and reopening restores the attachment.
+          summariesRef.current.set(msg.graph.id, msg.graph);
+          setRecent((current) =>
+            current.map((g) => (g.id === msg.graph.id ? msg.graph : g)),
+          );
           break;
         case 'verified':
           setVerifyResult({ id: msg.id, detail: `${msg.ok ? '✓' : '✗'} ${msg.detail}` });
           break;
-        case 'loaded':
+        case 'loaded': {
+          const summary = summariesRef.current.get(msg.graph.id);
           setViewing({
             graph: msg.graph,
-            name: namesRef.current.get(msg.graph.id) ?? msg.graph.id,
+            summary: summary ?? {
+              id: msg.graph.id,
+              name: msg.graph.id,
+              sizeBytes: 0,
+              importedAt: '',
+              nodeCount: msg.graph.nodeCount,
+              edgeCount: msg.graph.edgeCount,
+              skippedRows: 0,
+              weighted: false,
+            },
           });
           break;
+        }
         case 'error':
           setState({ phase: 'error', message: msg.message });
           break;
@@ -98,18 +122,26 @@ export function App() {
     [ingest],
   );
 
-  const openGraph = useCallback((id: string, name: string) => {
-    namesRef.current.set(id, name);
-    workerRef.current?.postMessage({ type: 'load', id } satisfies ToWorker);
+  const openGraph = useCallback((summary: GraphSummary) => {
+    // The cache is fed by the worker (`graphs`, `attributes-saved`) and is the
+    // authority. `summary` may be the ingest-time snapshot behind "open graph",
+    // which was captured before any attributes file existed and never learns
+    // about one — writing it over a newer manifest loses the attachment.
+    if (!summariesRef.current.has(summary.id)) summariesRef.current.set(summary.id, summary);
+    workerRef.current?.postMessage({ type: 'load', id: summary.id } satisfies ToWorker);
   }, []);
 
   if (viewing && workerRef.current) {
     return (
       <GraphView
         graph={viewing.graph}
-        name={viewing.name}
+        name={viewing.summary.name}
+        attached={viewing.summary.attributes ?? null}
         worker={workerRef.current}
-        onClose={() => setViewing(null)}
+        onClose={() => {
+          setViewing(null);
+          workerRef.current?.postMessage({ type: 'list' } satisfies ToWorker);
+        }}
       />
     );
   }
@@ -191,7 +223,7 @@ export function App() {
                 · persist {state.graph.timings.persistMs} ms — stored in this browser
               </p>
             )}
-            <button onClick={() => openGraph(state.graph.id, state.graph.name)}>
+            <button onClick={() => openGraph(state.graph)}>
               open graph
             </button>
           </div>
@@ -214,7 +246,7 @@ export function App() {
                   {g.name} — {g.nodeCount.toLocaleString()} nodes,{' '}
                   {g.edgeCount.toLocaleString()} edges
                 </span>
-                <button onClick={() => openGraph(g.id, g.name)}>open</button>
+                <button onClick={() => openGraph(g)}>open</button>
                 <button
                   onClick={() => {
                     setVerifyResult(null);

@@ -25,6 +25,8 @@ import { multilevelLayout } from '../layout/multilevel';
 import { WORLD_SIZE, mulberry32, type LayoutProgress } from '../layout/params';
 import { buildPickIndex, pickNode, visibleNodeCount, type PickIndex } from '../interact/pick';
 import { nodeId, searchNodes, type SearchHit } from '../interact/search';
+import type { AttributeStore } from '../analytics/attributes';
+import { AttributesPanel } from './AttributesPanel';
 import type {
   FromWorker,
   HierarchyLevelBuffers,
@@ -137,10 +139,12 @@ interface Neighborhood {
   listed: NodeRef[];
 }
 
-export function GraphView({ graph, name, worker, onClose }: {
+export function GraphView({ graph, name, worker, attached, onClose }: {
   graph: LoadedGraph;
   name: string;
   worker: Worker;
+  /** A node-attributes file attached in a previous session, if any (M4). */
+  attached: { fileName: string; joinColumn: string } | null;
   onClose: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -159,9 +163,30 @@ export function GraphView({ graph, name, worker, onClose }: {
   const [query, setQuery] = useState('');
 
   /** Imperative handle into the render effect, for sidebar-driven selection. */
-  const viewApi = useRef<{ select: (node: number) => void; focus: (node: number) => void } | null>(
-    null,
-  );
+  const viewApi = useRef<{
+    select: (node: number) => void;
+    focus: (node: number) => void;
+    setStyle: (style: Uint32Array | null) => void;
+  } | null>(null);
+
+  // Attribute styling and the attribute card. The style buffer is kept here
+  // rather than in the render effect because that effect is rebuilt on every
+  // seed change, and a re-layout moves nodes without renumbering them — the
+  // colours the user picked must survive it.
+  const styleRef = useRef<Uint32Array | null>(null);
+  const storeRef = useRef<AttributeStore | null>(null);
+  const [storeVersion, setStoreVersion] = useState(0);
+  const [attrValues, setAttrValues] = useState<Record<string, string> | null>(null);
+
+  const applyStyle = useCallback((style: Uint32Array | null) => {
+    styleRef.current = style;
+    viewApi.current?.setStyle(style);
+  }, []);
+
+  const handleStore = useCallback((store: AttributeStore | null) => {
+    storeRef.current = store;
+    setStoreVersion((v) => v + 1);
+  }, []);
 
   const describe = useCallback(
     (node: number): NodeRef => ({
@@ -349,7 +374,14 @@ export function GraphView({ graph, name, worker, onClose }: {
         camera.centerX = x;
         camera.centerY = y;
       };
-      viewApi.current = { select, focus };
+      viewApi.current = {
+        select,
+        focus,
+        setStyle: (style) => renderer?.setNodeStyle(style),
+      };
+      // Re-apply whatever the attributes panel had set: this effect re-runs on
+      // a seed change with a brand-new renderer, whose style buffer is empty.
+      renderer.setNodeStyle(styleRef.current);
 
       // ---- Pointer: pan/zoom plus pick-on-move and select-on-click.
       let dragging = false;
@@ -645,6 +677,29 @@ export function GraphView({ graph, name, worker, onClose }: {
     setNeighborhood(null);
   }, [seed]);
 
+  // Attribute values are fetched for the *selection* only, never for hover:
+  // hover changes at pointer rate and this is a round trip to a query engine
+  // (D12 draws the same line for the neighbourhood query).
+  useEffect(() => {
+    const store = storeRef.current;
+    if (!store || !selected) {
+      setAttrValues(null);
+      return;
+    }
+    let cancelled = false;
+    void store
+      .values(selected.node)
+      .then((values) => {
+        if (!cancelled) setAttrValues(values);
+      })
+      .catch(() => {
+        if (!cancelled) setAttrValues(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, storeVersion]);
+
   const pick = useCallback((node: number) => {
     viewApi.current?.select(node);
     if (node >= 0) viewApi.current?.focus(node);
@@ -765,12 +820,31 @@ export function GraphView({ graph, name, worker, onClose }: {
               </div>
             )}
 
+            {selected && attrValues && Object.keys(attrValues).length > 0 && (
+              <dl className="attr-card" data-testid="attribute-card">
+                {Object.entries(attrValues).map(([key, value]) => (
+                  <div key={key}>
+                    <dt>{key}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+
             {!selected && !hover && !search && (
               <p className="muted hint">
                 Hover a node for its id and degree, click to select it and highlight its
                 neighbours. Picking wakes up once the layout settles.
               </p>
             )}
+
+            <AttributesPanel
+              graph={graph}
+              worker={worker}
+              attached={attached}
+              onStyle={applyStyle}
+              onStore={handleStore}
+            />
           </aside>
         </div>
       )}

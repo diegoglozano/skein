@@ -587,3 +587,111 @@ the fixed 2.5 px point size (not the count) is what needs to move; or a deep-zoo
 frame turns out to be vertex-bound below the *new* 300k ceiling, which would mean
 real culling — a spatial index over the settled layout feeding an indirect draw —
 stops being optional.
+
+## D14 — DuckDB-WASM stays, self-hosted and lazy; the payload is the price
+
+§13 left an open question: "is DuckDB-WASM's bundle size (~30 MB wasm)
+acceptable for a tool that must work offline after first load? Measure; consider
+lazy-loading it only when metadata is attached." M4's attributes half could not
+start without answering it, so it was measured first (`@duckdb/duckdb-wasm`
+1.29.0):
+
+| bundle | raw | brotli q9 |
+|---|---|---|
+| `duckdb-eh.wasm` (exception handling, single-threaded) | 34.0 MB | 5.3 MB |
+| `duckdb-mvp.wasm` (no EH) | 38.7 MB | — |
+| `duckdb-coi.wasm` (pthreads) | 33.6 MB | — |
+
+**Decision: keep DuckDB (§5, D4), ship exactly one bundle (`eh`), self-host it,
+and load it only when the user opens the attributes panel.** The measurement
+supports D4 rather than overturning it — 5.3 MB over the wire, once, for the
+users who want SQL filters — so the "don't hand-roll this" instruction stands.
+
+Three things follow, and each is enforced somewhere:
+
+**Self-hosting is the privacy-critical part.** `getJsDelivrBundles()` is what
+every duckdb-wasm example calls; it resolves the worker *and* the 34 MB wasm
+from a CDN, and an app that did that would look and behave exactly like this
+one. Both URLs are Vite `?url` imports instead, so they are emitted as
+same-origin assets, and `connect-src 'self'` (D1) would block the alternative.
+`no-network.spec.ts` now drives the whole attributes path — attach, join,
+colour, filter — and additionally asserts that a `duckdb*.wasm` request *did*
+happen, because a privacy test that proves "no CDN" about a bundle nobody
+loaded proves nothing.
+
+**Lazy is a product decision, not a build trick.** The panel starts switched
+off behind a button that says what pressing it costs. `attributes.spec.ts`
+fails if any `duckdb` request appears in a session that ingests, lays out,
+renders and explores without opening the panel. A graph that already has a file
+attached opens it automatically — that cost was accepted last time.
+
+**One bundle, not three.** `mvp` exists for browsers without wasm exception
+handling, which no browser with WebGPU-or-WebGL2 plus OPFS is; `coi` buys
+threads for another 34 MB. Shipping only `eh` is 68 MB of `dist` not carried.
+
+**Distribution: the binary got *smaller*.** `dist` went from ~1.5 MB to 36 MB,
+which would have taken the D10 binary from ~12 MB to ~48 MB. So `build.rs` now
+brotli-compresses every embedded asset over 4 KB (quality 9: 2.2 s and 5.3 MB
+for the big one, against ~60 s and 5.1 MB at quality 11) and `server.rs`
+negotiates on `Accept-Encoding` — served as stored to any browser, decompressed
+on the fly for a client that does not offer `br`. The binary is **6.8 MB with
+DuckDB in it**, against ~12 MB without it before. `Vary: Accept-Encoding` is
+sent either way, and an `assets.rs` test decompresses every compressed row of
+the embedded table, because a corrupt `br` body would surface as a blank page
+rather than as an error.
+
+**What it does not buy.** DuckDB does not replace the interner. The join is
+`nodes(idx, id, degree) LEFT JOIN attrs`, and `nodes` is inserted as Arrow
+straight from the §4.2 dictionary — `idOffsets`/`idBytes` *are* an Arrow Utf8
+array's two buffers, so the graph crosses the boundary as two typed arrays
+rather than as a million JavaScript strings. `degree` rides along, which is why
+colour-by, size-by, filtering and the §10 degree histogram all work before any
+second file exists.
+
+**One buffer drives colour, size and visibility.** `web/src/render/style.ts`
+packs a u32 per node — rgb in the low three bytes, a size code in the top one,
+with code 0 meaning "hidden". The byte order is the one both backends decode for
+free (`unpack4x8unorm` takes byte 0 as x; a little-endian u32 uploaded as RGBA8
+puts byte 0 in `.r`), so one array feeds a WebGPU storage buffer and a WebGL2
+texture with no repacking. A hidden node takes its edges with it, which needs
+*both* endpoints in the edge vertex shader: WebGPU indexes the endpoint buffer
+freely, but GL2 cannot reach the partner vertex's attribute, so the styled edge
+pass there is `drawArraysInstanced(LINES, 0, 2, n)` over endpoint *pairs*.
+
+That is a different draw call from the flat line list every committed benchmark
+measured, and its cost at the top tier is **not measured**. So it is not on the
+default path: `webgl2.ts` keeps both programs and both vertex-array bindings
+over the same buffer, and a graph with no style buffer bound draws exactly what
+it drew before. Only a session that has switched styling on can pay for the
+change, and only on the fallback tier.
+
+**Revisit if:** the wasm grows enough that 5.3 MB stops being a one-time cost
+worth a shrug; or attributes turn out to be used by nearly everyone, which would
+make the switched-off default a papercut rather than a courtesy; or a
+second sequential context appears and the three-hue cap (below) starts hurting.
+
+### D14a — the categorical palette caps at three colours, and that is measured
+
+A graph layout is a scatter: any two categories can land on adjacent pixels, so
+the palette has to hold under the *all-pairs* separation gate rather than the
+adjacent-pairs one a bar chart gets away with. Against this canvas (`#0b0b12`),
+run through the data-viz validator:
+
+- **3 slots pass** (blue `#3987e5`, orange `#d95926`, aqua `#199e70`): worst
+  all-pairs CVD ΔE 9.4, normal-vision ΔE 20.9.
+- **4 slots fail, for every candidate fourth hue.** Normal-vision ΔE against the
+  first three: violet 9.8, yellow 10.6, magenta 11.6, green 11.9, red 7.1 —
+  all under the 15 floor, which is a hard fail that secondary encoding does not
+  excuse (a full-colour reader cannot tell the pair apart either).
+
+So a categorical column colours its three most common values and groups the rest
+into one neutral, the legend is always present, and the panel says so. Numeric
+columns get a 6-step sequential blue ramp — 8 steps put adjacent steps under the
+ΔL 0.06 gap and they stop reading as distinct.
+
+The assignment is computed **once per column, from the whole column**, and never
+recomputed: a filter that changes which values are on screen must not repaint the
+ones that survive it.
+
+**Revisit if:** node marks grow enough to carry a second channel (shape, or a
+ring), which is what would let identity survive past three hues.

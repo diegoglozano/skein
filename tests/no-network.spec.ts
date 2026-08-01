@@ -3,7 +3,14 @@
 // gates merges to main.
 
 import { test, expect } from '@playwright/test';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { dropFixture } from './helpers';
+
+const NODE_ATTRS = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../bench/fixtures/tiny-nodes.csv',
+);
 
 test('app makes no off-origin requests', async ({ page, baseURL }) => {
   const origin = new URL(baseURL!).origin;
@@ -52,12 +59,34 @@ test('app makes no off-origin requests', async ({ page, baseURL }) => {
     timeout: 15_000,
   });
 
+  // And through the M4 attributes path. This is the reason the test exists at
+  // all for DuckDB: `getJsDelivrBundles()` is what every duckdb-wasm example
+  // calls, it resolves the worker and the 34 MB wasm from a CDN, and an app
+  // that did that would look and feel identical to this one (D14).
+  await page.getByTestId('enable-attributes').click();
+  await expect(page.getByTestId('colour-by')).toBeVisible({ timeout: 120_000 });
+  await page.getByTestId('attributes-file').setInputFiles(NODE_ATTRS);
+  await expect(page.getByTestId('join-report')).toContainText('10,000 of 10,000 nodes matched', {
+    timeout: 60_000,
+  });
+  await page.getByTestId('colour-by').selectOption('kind');
+  await page.getByTestId('filter-community').click();
+  await page.getByRole('checkbox', { name: 'c0', exact: true }).check();
+  await expect(page.getByTestId('filter-count')).toContainText('833', { timeout: 30_000 });
+
   // Let any deferred requests (lazy chunks, prefetch, telemetry-by-accident)
   // surface before judging.
   await page.waitForTimeout(2000);
 
   expect(offOrigin, `off-origin requests detected:\n${offOrigin.join('\n')}`).toHaveLength(0);
   expect(all.length, 'expected at least the document + assets').toBeGreaterThan(0);
+  // The DuckDB payload is lazy (D14): it must be absent until the panel is
+  // opened and present afterwards, or "no CDN" is being proved about a bundle
+  // nobody loaded.
+  expect(
+    all.filter((url) => /duckdb.*\.wasm$/.test(url)),
+    'the self-hosted DuckDB wasm was never fetched — the rest of this test proved nothing',
+  ).toHaveLength(1);
 });
 
 // The no-WebGPU tier runs the whole layout in WASM inside the worker (D11) —

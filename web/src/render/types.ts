@@ -66,6 +66,17 @@ export interface Renderer {
    */
   setHighlight(nodes: Uint32Array, edges: Uint32Array): void;
   /**
+   * Per-node colour, size and visibility (M4 attributes), one packed u32 per
+   * node — see `style.ts` for the layout. `null` restores the unstyled
+   * constant colouring, which is also what a graph with no attributes draws,
+   * so an attribute-free session costs exactly what it did before.
+   *
+   * A node whose size code is 0 is not drawn, and neither is any edge with
+   * that node as an endpoint: a filter that hides nodes but leaves their edges
+   * hanging reads as a rendering bug rather than as a filter.
+   */
+  setNodeStyle(style: Uint32Array | null): void;
+  /**
    * WebGPU only: the live positions storage buffer, so a compute sim on the
    * same device can copyBufferToBuffer into it without a CPU round trip.
    */

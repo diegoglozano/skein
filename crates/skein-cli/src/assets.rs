@@ -4,6 +4,7 @@
 
 use std::borrow::Cow;
 use std::fs;
+use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
@@ -13,9 +14,52 @@ pub enum Assets {
     Dir(PathBuf),
 }
 
+/// Bytes plus how they are stored. Embedded assets over a few KB are kept
+/// brotli-compressed (see `build.rs`); every browser asks for `br`, so the
+/// common case is served exactly as stored, and `into_plain` covers the client
+/// that does not.
+pub struct Asset {
+    pub bytes: Cow<'static, [u8]>,
+    pub brotli: bool,
+}
+
+impl Asset {
+    fn plain(bytes: Cow<'static, [u8]>) -> Self {
+        Asset {
+            bytes,
+            brotli: false,
+        }
+    }
+
+    /// Decompress, for a client that did not offer `br`.
+    pub fn into_plain(self) -> Cow<'static, [u8]> {
+        if !self.brotli {
+            return self.bytes;
+        }
+        let mut out = Vec::new();
+        match brotli::BrotliDecompress(&mut Cursor::new(self.bytes.as_ref()), &mut out) {
+            Ok(()) => Cow::Owned(out),
+            // Cannot happen for bytes this build produced; serving the
+            // compressed stream unlabelled would be worse than an empty body.
+            Err(_) => Cow::Owned(Vec::new()),
+        }
+    }
+}
+
 impl Assets {
     pub fn is_empty(&self) -> bool {
         matches!(self, Assets::Embedded) && EMBEDDED.is_empty()
+    }
+
+    /// Round-trip check on the embedded table: every compressed asset must
+    /// decompress. A brotli stream that this build cannot read would be served
+    /// to browsers as a `Content-Encoding: br` body they also cannot read, and
+    /// the failure would surface as a blank page rather than as an error.
+    #[cfg(test)]
+    fn embedded_decompresses() -> bool {
+        EMBEDDED.iter().all(|(_, bytes, brotli)| {
+            !*brotli || brotli::BrotliDecompress(&mut Cursor::new(*bytes), &mut Vec::new()).is_ok()
+        })
     }
 
     pub fn describe(&self) -> String {
@@ -29,15 +73,24 @@ impl Assets {
     /// and cache headers are derived from the same normalized string, so
     /// resolving it here instead would let `/` be served as `index.html` while
     /// still being labelled `application/octet-stream`.
-    pub fn get(&self, route: &str) -> Option<Cow<'static, [u8]>> {
+    pub fn get(&self, route: &str) -> Option<Asset> {
         match self {
-            Assets::Embedded => EMBEDDED
-                .iter()
-                .find(|(name, _)| *name == route)
-                .map(|(_, bytes)| Cow::Borrowed(*bytes)),
+            Assets::Embedded => {
+                EMBEDDED
+                    .iter()
+                    .find(|(name, _, _)| *name == route)
+                    .map(|(_, bytes, brotli)| Asset {
+                        bytes: Cow::Borrowed(*bytes),
+                        brotli: *brotli,
+                    })
+            }
+            // `--web-root` reads whatever is on disk, uncompressed: it exists
+            // for iterating on the app without rebuilding the binary.
             Assets::Dir(dir) => {
                 let path = safe_join(dir, route)?;
-                fs::read(path).ok().map(Cow::Owned)
+                fs::read(path)
+                    .ok()
+                    .map(|bytes| Asset::plain(Cow::Owned(bytes)))
             }
         }
     }
@@ -162,11 +215,13 @@ mod tests {
         fs::write(dir.join("index.html"), b"root").unwrap();
         fs::write(dir.join("sub/index.html"), b"nested").unwrap();
         let assets = Assets::Dir(dir.clone());
-        assert_eq!(assets.get(&normalize("")).as_deref(), Some(&b"root"[..]));
-        assert_eq!(
-            assets.get(&normalize("sub/")).as_deref(),
-            Some(&b"nested"[..])
-        );
+        let body = |route: &str| {
+            assets
+                .get(&normalize(route))
+                .map(|a| a.into_plain().into_owned())
+        };
+        assert_eq!(body("").as_deref(), Some(&b"root"[..]));
+        assert_eq!(body("sub/").as_deref(), Some(&b"nested"[..]));
         assert!(assets.get(&normalize("missing.html")).is_none());
         fs::remove_dir_all(dir).ok();
     }
@@ -190,6 +245,35 @@ mod tests {
         );
         assert_eq!(content_type("index.html"), "text/html; charset=utf-8");
         assert_eq!(content_type("noext"), "application/octet-stream");
+    }
+
+    /// The `Accept-Encoding`-less client's path: stored compressed, served
+    /// plain. Covered here as well as by the embedded table, which is empty
+    /// unless an npm build ran.
+    #[test]
+    fn compressed_assets_round_trip_to_the_original_bytes() {
+        let original = b"skein".repeat(1000);
+        let mut compressed = Vec::new();
+        brotli::BrotliCompress(
+            &mut Cursor::new(&original),
+            &mut compressed,
+            &brotli::enc::BrotliEncoderParams::default(),
+        )
+        .unwrap();
+        assert!(compressed.len() < original.len());
+
+        let asset = Asset {
+            bytes: Cow::Owned(compressed),
+            brotli: true,
+        };
+        assert_eq!(asset.into_plain().into_owned(), original);
+    }
+
+    #[test]
+    fn every_embedded_asset_decompresses() {
+        // Vacuously true without an npm build, which is the documented state
+        // for a bare `cargo test --workspace`.
+        assert!(Assets::embedded_decompresses());
     }
 
     #[test]
