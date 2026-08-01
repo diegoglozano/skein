@@ -3,6 +3,7 @@
 // endpoints once, zero expansion or per-frame uploads. Nodes are instanced
 // quads; edges are a line-list drawn straight from the endpoint indices.
 
+import { STYLE_DECODE_WGSL } from './style';
 import type { DrawLimits, RenderGraph, Renderer, ViewTransform } from './types';
 
 const SHADER = /* wgsl */ `
@@ -11,8 +12,11 @@ struct View {
   offset: vec2f,
   viewportPx: vec2f,
   pointSizePx: f32,
-  _pad: f32,
+  /** 1 when a per-node style buffer is bound; 0 restores the flat colouring. */
+  styled: f32,
 }
+
+${STYLE_DECODE_WGSL}
 
 @group(0) @binding(0) var<uniform> view: View;
 @group(0) @binding(1) var<storage, read> positions: array<vec2f>;
@@ -25,6 +29,8 @@ struct View {
 // this, so capping the instance count samples the graph instead of slicing off
 // whatever the interner numbered last.
 @group(0) @binding(5) var<storage, read> nodeOrder: array<u32>;
+// Packed per-node colour + size + visibility (M4); read only when view.styled.
+@group(0) @binding(6) var<storage, read> nodeStyle: array<u32>;
 
 fn toClip(world: vec2f) -> vec2f {
   return world * view.scale + view.offset;
@@ -35,18 +41,47 @@ struct VsOut {
   @location(0) color: vec4f,
 }
 
+/** Filtered-out geometry is pushed outside the clip volume (0 <= z <= w). */
+fn culled() -> VsOut {
+  var out: VsOut;
+  out.pos = vec4f(0.0, 0.0, -2.0, 1.0);
+  out.color = vec4f(0.0);
+  return out;
+}
+
 @vertex
 fn nodeVs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut {
+  let node = nodeOrder[ii];
+  var color = vec4f(0.85, 0.87, 0.95, 0.9);
+  var scale = 1.0;
+  if (view.styled > 0.5) {
+    let s = unpack4x8unorm(nodeStyle[node]);
+    if (s.w == 0.0) {
+      return culled();
+    }
+    color = vec4f(s.xyz, 0.9);
+    scale = styleSize(s.w);
+  }
   let corner = vec2f(f32(vi & 1u), f32(vi >> 1u)) * 2.0 - 1.0;
-  let clip = toClip(positions[nodeOrder[ii]]) + corner * view.pointSizePx / view.viewportPx;
+  let clip = toClip(positions[node]) + corner * (view.pointSizePx * scale) / view.viewportPx;
   var out: VsOut;
   out.pos = vec4f(clip, 0.0, 1.0);
-  out.color = vec4f(0.85, 0.87, 0.95, 0.9);
+  out.color = color;
   return out;
 }
 
 @vertex
 fn edgeVs(@builtin(vertex_index) vi: u32) -> VsOut {
+  // Both endpoints decide, not just this vertex's: culling one end of a line
+  // leaves the other end drawing a segment to the near plane.
+  if (view.styled > 0.5) {
+    let pair = vi & 0xfffffffeu;
+    let a = unpack4x8unorm(nodeStyle[endpoints[pair]]).w;
+    let b = unpack4x8unorm(nodeStyle[endpoints[pair + 1u]]).w;
+    if (a == 0.0 || b == 0.0) {
+      return culled();
+    }
+  }
   let clip = toClip(positions[endpoints[vi]]);
   var out: VsOut;
   out.pos = vec4f(clip, 0.0, 1.0);
@@ -115,6 +150,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
       { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
     ],
   });
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] });
@@ -169,6 +205,10 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
   let hiEdgesBuf = storage(0);
   let hiNodeCount = 0;
   let hiEdgeCount = 0;
+  // Bindings must be non-empty even when unused, so an unstyled graph keeps a
+  // 4-byte stub here and the shader never reads it (view.styled stays 0).
+  let styleBuf = storage(0);
+  let styled = false;
 
   const rebuildBindGroup = () => {
     if (!positionsBuf || !endpointsBuf || !nodeOrderBuf) return;
@@ -181,6 +221,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
         { binding: 3, resource: { buffer: hiNodesBuf } },
         { binding: 4, resource: { buffer: hiEdgesBuf } },
         { binding: 5, resource: { buffer: nodeOrderBuf } },
+        { binding: 6, resource: { buffer: styleBuf } },
       ],
     });
   };
@@ -225,7 +266,20 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
 
       hiNodeCount = 0;
       hiEdgeCount = 0;
+      // A new graph's node indices mean nothing to the old style buffer.
+      styled = false;
       rebuildBindGroup();
+    },
+
+    setNodeStyle(style: Uint32Array | null) {
+      styled = style !== null;
+      if (!style) return;
+      if (style.byteLength > styleBuf.size) {
+        styleBuf.destroy();
+        styleBuf = storage(style.byteLength);
+        rebuildBindGroup();
+      }
+      device.queue.writeBuffer(styleBuf, 0, style as Uint32Array<ArrayBuffer>);
     },
 
     setHighlight(nodes: Uint32Array, edges: Uint32Array) {
@@ -263,7 +317,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
         view.widthPx,
         view.heightPx,
         view.pointSizePx,
-        0,
+        styled ? 1 : 0,
       ]);
       device.queue.writeBuffer(uniform, 0, uniformData);
 
@@ -308,6 +362,7 @@ export async function createWebGpuRenderer(canvas: HTMLCanvasElement): Promise<R
       nodeOrderBuf?.destroy();
       hiNodesBuf.destroy();
       hiEdgesBuf.destroy();
+      styleBuf.destroy();
       uniform.destroy();
       device.destroy();
     },

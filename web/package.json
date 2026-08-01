@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@cosmos.gl/graph": "^3.4.0",
+    "@duckdb/duckdb-wasm": "1.29.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

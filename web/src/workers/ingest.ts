@@ -27,6 +27,7 @@ import {
   loadGraphDictionary,
   loadPositions,
   persistGraphBuffers,
+  saveAttributes,
   savePositions,
   verifyGraph,
   writeManifest,
@@ -318,6 +319,11 @@ onmessage = async (event: MessageEvent<ToWorker>) => {
       case 'cancel-layout':
         layoutEpoch++;
         break;
+      case 'save-attributes': {
+        const graph = await saveAttributes(msg.id, msg.file, msg.joinColumn);
+        post({ type: 'attributes-saved', id: msg.id, graph });
+        break;
+      }
       case 'save-positions': {
         await savePositions(msg.id, msg.seed, msg.positions);
         post({ type: 'positions-saved', id: msg.id });

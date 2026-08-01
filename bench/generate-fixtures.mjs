@@ -2,8 +2,9 @@
 // Deterministic synthetic fixture generator (REQUIREMENTS.md §14: never commit
 // large fixtures — regenerate). Produces scale-free graphs via preferential
 // attachment, written as:
-//   - {name}.csv   "source,target" with string ids, for ingest tests
-//   - {name}.bin   little-endian u32 pairs, for the render/layout spike
+//   - {name}.csv        "source,target" with string ids, for ingest tests
+//   - {name}.bin        little-endian u32 pairs, for the render/layout spike
+//   - {name}-nodes.csv  node attributes, the D4 second file (M4)
 //
 // Usage: node bench/generate-fixtures.mjs [preset ...]
 // Presets: tiny (10k/50k), small (100k/500k), medium (1M/10M)
@@ -104,6 +105,46 @@ function generateClustered(nodes, edges, communities, pIntra, seed = 0x5eed) {
   return { src, dst };
 }
 
+// Node attributes — the second file of D4's two-file ingest, joined on the node
+// id. Three columns, one of each shape the UI has to handle: a wide
+// categorical, a continuous numeric, and a small categorical.
+//
+// For the clustered preset `community` is the *planted* community, which makes
+// colour-by-community the visual check on both layout and the join: the colours
+// must land on the blobs the force sim separated.
+//
+// The last rows are ids that appear in no edge, so the unmatched-key report has
+// something to report on every fixture.
+const GHOST_KEYS = 10;
+const KINDS = ['hub', 'bridge', 'leaf'];
+
+async function writeNodeAttributes(name, { nodes, communities }, seed = 0xa771b) {
+  const rng = makeRng(seed);
+  const groups = communities ?? 12;
+  const size = Math.max(1, Math.floor(nodes / groups));
+  const csv = createWriteStream(path.join(OUT_DIR, `${name}-nodes.csv`));
+  const CHUNK = 250_000;
+  const chunks = [];
+  let buf = ['id,community,score,kind'];
+  for (let i = 0; i < nodes; i++) {
+    // Planted communities are contiguous id ranges (see generateClustered), so
+    // the same arithmetic recovers them exactly.
+    const community = Math.min(groups - 1, Math.floor(i / size));
+    buf.push(`n${i},c${community},${rng().toFixed(4)},${KINDS[Math.floor(rng() * KINDS.length)]}`);
+    if (buf.length >= CHUNK) {
+      chunks.push(buf.join('\n') + '\n');
+      buf = [];
+    }
+  }
+  for (let i = 0; i < GHOST_KEYS; i++) {
+    buf.push(`ghost${i},c0,${rng().toFixed(4)},${KINDS[0]}`);
+  }
+  chunks.push(buf.join('\n') + '\n');
+  await writeAll(csv, chunks);
+  csv.end();
+  await once(csv, 'close');
+}
+
 async function writeFixture(name, { nodes, edges, communities, pIntra }) {
   mkdirSync(OUT_DIR, { recursive: true });
   const t0 = performance.now();
@@ -139,6 +180,8 @@ async function writeFixture(name, { nodes, edges, communities, pIntra }) {
   await writeAll(csv, chunks);
   csv.end();
   await once(csv, 'close');
+
+  await writeNodeAttributes(name, { nodes, communities });
 
   console.log(`${name}: ${nodes} nodes, ${edges} edges in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 }

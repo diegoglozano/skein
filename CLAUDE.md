@@ -91,7 +91,7 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   rose 150k → 1M on measured numbers (medium 1M/10M lays out in 23.9 s of the
   45 s budget on the fallback tier); `tests/layout-fallback.spec.ts` gates the
   path with WebGPU hidden, `tests/manual-layout-fallback.mjs` measures it.
-- **M4 — half done (2026-08-01).** Split in two. **Interaction — done:**
+- **M4 — done (2026-08-01).** Split in two. **Interaction — done:**
   hover, click selection, 1-hop neighbourhood highlight and id search (§10),
   no new dependencies. Per D12 only the *cursor-rate* work is main-thread
   TypeScript (`web/src/interact/`: a uniform pick grid over settled positions,
@@ -109,11 +109,41 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   rAF ceiling that session (a blank page measured 30.2), so it is not
   comparable to M2's 56.9 median; re-take M2's numbers rather than diffing,
   since the explore panel also narrowed the fill-bound canvas.
-  **Attributes — not started:** DuckDB-WASM attributes, filters, colour/size
-  by column (D4 two-file ingest). That half carries §13's bundle-size question
-  and needs a privacy decision first: DuckDB-WASM resolves its bundles from a
-  CDN by default and must be fully self-hosted to hold §7.
-  Also still open: the D9 banding artifact if it bothers real datasets.
+  **Attributes — done (2026-08-01), so M4 is complete.** DuckDB-WASM, fully
+  self-hosted and lazy (D14 has the measurements and the reasoning).
+  `web/src/analytics/`: `duckdb.ts` owns the engine — the `eh` bundle only,
+  reached through Vite `?url` imports so it can never come from a CDN, and
+  behind a dynamic `import()` so a session that never opens the panel never
+  fetches it; `attributes.ts` is the store. Two tables and a view —
+  `nodes(idx, id, degree)` inserted as **Arrow straight from the §4.2
+  dictionary** (`idOffsets`/`idBytes` already are an Arrow Utf8 array's two
+  buffers, so no JS strings are built), `attrs_raw` from the attached CSV with
+  DuckDB inferring types, and `node_attrs` as their LEFT JOIN. Because `degree`
+  is in `nodes`, colour/size/filter and the §10 histogram all work with no
+  second file. Duplicate join keys are dropped with `QUALIFY row_number()` and
+  reported, as are unmatched rows (D4's promise). DuckDB runs in the worker it
+  already owns — deliberately *not* wrapped in a second one — so
+  `web/src/analytics/` is main-thread code that talks to it.
+  Both renderers grew `setNodeStyle`: one packed u32 per node
+  (`web/src/render/style.ts` — rgb + size code, size 0 hides the node *and*
+  every edge touching it) driving colour, size and filtering from a single
+  buffer. WebGPU reads it as a storage buffer via `unpack4x8unorm`; WebGL2 as an
+  RGBA8 texture, which is also why its *styled* edge pass is instanced endpoint
+  *pairs* — GL2 has no way to reach the partner vertex's attribute, and culling
+  only one end of a line leaves a segment to the near plane. That draw call is
+  unmeasured at the top tier, so `webgl2.ts` keeps the old flat line list too
+  and an unstyled graph still takes it: no benchmark moves unless styling is on.
+  Palette is capped at three categorical hues, measured not chosen (D14a).
+  `tests/attributes.spec.ts` gates it against fixture ground truth
+  (`bench/fixtures/*-nodes.csv`, now generated); the privacy gate drives the
+  whole attributes path and asserts the wasm *was* fetched, so it is not
+  proving "no CDN" about a bundle nobody loaded.
+  Distribution: `build.rs` brotli-compresses embedded assets and `server.rs`
+  negotiates `Accept-Encoding`, so the binary is **6.8 MB with DuckDB in it**,
+  down from ~12 MB without it.
+  Still open: the D9 banding artifact if it bothers real datasets; no
+  real-hardware attribute timings yet (the numbers above are correctness, not
+  §9 performance).
 - **Post-M4 — draw budget follows zoom (D13, 2026-08-01).** Answers D8's
   "raise the cap once positions are no longer random", and answers it as
   *adaptive* rather than higher. Neither renderer culls, so vertex work is
@@ -160,7 +190,8 @@ Metal and native OpenGL, so the D7 fail is not the §8 ANGLE pathology.
 npm install                      # web + tests workspaces
 cargo test --workspace           # core tests
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
-npm run fixtures                 # tiny + small fixtures (gitignored, required for tests)
+npm run fixtures                 # tiny + small fixtures, edges + {name}-nodes.csv
+                                 # attributes (gitignored, required for tests)
 npm run dev                      # app :5173, spike at /spike.html?fixture=tiny
 npm run build -w web             # typecheck + production build (CSP injected here only)
 npm run test -w tests            # privacy gate + app suite (needs fixtures + built web)
