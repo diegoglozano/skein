@@ -11,6 +11,7 @@ export { Camera } from './camera';
 export {
   DEFAULT_BUDGET,
   lodLimits,
+  screenCoverage,
   shuffleEdgePairs,
   shuffledOrder,
   type LodBudget,

@@ -127,11 +127,26 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   camera — deliberately not fps-driven, which would break D2 — and needs no
   alpha compensation, since a constant on-screen count already holds density
   constant. `tests/lod.spec.ts` gates it (needs the `small` fixture; CI now
-  generates it). **The budget numbers are not calibrated**: 300k edges is
-  D8's measured value carried over, 1M nodes is a no-op below §9's 5M tier,
-  and `maxEdges` 2M is a placeholder for where deep-zoom frames turn
-  vertex-bound. `tests/manual-render.mjs` now sweeps zoom levels to produce
-  those numbers on real hardware.
+  generates it).
+- **Post-M4 — D13 calibrated, and corrected twice (D13a, 2026-08-01).** The
+  headed run on the M3 Air produced corrections rather than three constants,
+  because **the fit view is not the most expensive frame** — it loses in both
+  directions. (1) Zooming out past fit collapsed 1M/10M from 57 to 7.8 fps,
+  under §9's floor, with the drawn counts bit-identical: fixed-pixel node quads
+  pack onto a shrinking screen and blended overdraw serialises, and `f` is blind
+  to it because it saturates at 1 exactly there. Hence a second `coverage` term,
+  normalised to the graph's *fit-view* area (viewport-relative silently thins
+  the fit view to 541k nodes, since a square layout covers only 0.54 of a 16:10
+  viewport). (2) There was no zoomed-in edge headroom to spend — edges are lines
+  whose on-screen pixel length grows with zoom — so `maxEdges` drops 2M → 300k
+  (sweep minima: 2M → 5.1 fps, 1M → 11.3, 500k → 20.4, 300k → 37.9) and now
+  equals `edges`: at this tier the scaling term can only *lower* the edge count.
+  Sweep minimum is now 34.8 fps across the full range; the fit view still draws
+  exactly D8's cap. Data in
+  `bench/results/lod-calibration-medium_csv-2026-08-01.json`. The old sweep
+  could not have found any of this — it never reset to the fit view and its
+  3.3× notches straddled the trough — so `tests/manual-render.mjs` now resets,
+  sweeps both ways at 1.49× notches, and reports `sweepMinFps`.
 - **M5:** not started; see §11 — distribution (D10) is already done.
 
 M0 facts worth keeping: headless Chromium falls back to SwiftShader even on

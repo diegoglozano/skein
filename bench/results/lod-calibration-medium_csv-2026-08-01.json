@@ -1,0 +1,69 @@
+{
+  "what": "D13 draw-budget calibration on real hardware, and the two model corrections it forced.",
+  "date": "2026-08-01",
+  "machine": "M3 MacBook Air (reference laptop, D3/D5), headed Chromium",
+  "backend": "webgpu",
+  "adapterInfo": "apple metal-3",
+  "fixture": "medium.csv",
+  "nodes": 1000000,
+  "edges": 10000000,
+  "viewport": [1600, 1000],
+  "harness": "tests/manual-render.mjs (zoom sweep, 1 wheel notch = deltaY 200 = 1.49x)",
+
+  "findings": [
+    {
+      "id": "fit-view-is-not-the-worst-frame",
+      "claim": "D13 asserts the fit view is the most expensive frame the app draws. It is not, in either direction.",
+      "evidence": "Fit view holds 55.7-57.6 fps. One notch out collapsed to 13.9 fps; one notch in sits at 34.8 fps. Both are worse than fit."
+    },
+    {
+      "id": "zoom-out-overdraw-collapse",
+      "claim": "Zooming out past the fit view collapsed the 1M tier below the §9 30 fps floor, and the budget could not see it.",
+      "evidence": "Pre-fix, medium.csv: 57 fps at fit, 13.9 at -2 notches, 7.8-13 out to -16, with drawnNodes/drawnEdges/f bit-identical across every row (1M nodes, 300k edges, f=1).",
+      "control": "small.csv (100k nodes, same 300k edges) holds 60.0-60.1 fps through the identical sweep, isolating the driver to node count rather than edges.",
+      "mechanism": "Node quads are sized in device pixels, so zooming out does not shrink them. The same 1M unshrinking alpha-blended quads pack onto a shrinking patch of screen and blended overdraw serialises per pixel.",
+      "why-invisible-to-D13": "`f` is the share of the graph inside the viewport. It saturates at 1 exactly when the graph starts shrinking below the viewport, so the policy had no lever in the one direction where the renderer was slow.",
+      "fix": "Multiply the budget by `coverage` — on-screen graph area as a multiple of its fit-view area. Normalised to the fit view, not the viewport: a square layout in a 16:10 viewport only covers 0.54 of it at fit, and normalising by viewport area silently thinned the very frame the budget was measured on (541k nodes instead of 1M)."
+    },
+    {
+      "id": "edge-fill-grows-with-zoom",
+      "claim": "D13's 'zoomed in it spends the headroom the fit view was reserving' does not survive measurement for edges. The headroom was never there.",
+      "mechanism": "Edges are lines whose on-screen pixel length grows with zoom. The surviving fraction falls but each survivor costs more to fill, and the two effects substantially cancel. Nodes, being fixed-size quads, do not have this property — hence the asymmetry between the two budgets.",
+      "worst-frame": "One notch inside the fit view: coverage 2.03, f 0.912 — the layout spread over ~2x the fit-view area with ~91% still on screen."
+    }
+  ],
+
+  "maxEdgesSweep": {
+    "method": "minimum fps over an 8-step zoom-in sweep from the fit view, one rebuild per candidate",
+    "note": "D13 shipped 2000000 as an admitted placeholder. It sits far inside the regime it was meant to mark.",
+    "results": [
+      { "maxEdges": 2000000, "minFps": 5.1 },
+      { "maxEdges": 1000000, "minFps": 11.3 },
+      { "maxEdges": 500000, "minFps": 20.4 },
+      { "maxEdges": 300000, "minFps": 37.9 }
+    ],
+    "chosen": 300000,
+    "rationale": "First value clearing §9's 30 fps floor for the 1M/10M tier. Leaves maxEdges === edges, i.e. at this tier the scaling term can only ever lower the edge count below D8's cap, never raise it."
+  },
+
+  "before": {
+    "config": { "nodes": 1000000, "edges": 300000, "maxEdges": 2000000 },
+    "fitFps": 57.0,
+    "minFpsZoomOut": 7.8,
+    "minFpsZoomIn": 5.1
+  },
+  "after": {
+    "config": { "nodes": 1000000, "edges": 300000, "maxEdges": 300000 },
+    "fitFps": 57.6,
+    "minFpsAcrossFullSweep": 34.8,
+    "fitViewDraw": { "nodes": 1000000, "edges": 300000, "coverage": 1.0, "f": 1.0 },
+    "note": "Fit view is unchanged from D8's cap, as D13 promised it would be. §9's floor now holds across the whole zoom range in both directions."
+  },
+
+  "stillOpen": [
+    "`f` has a resolution floor of one pick-grid cell — it pins at 2.40e-5 (24 nodes on this fixture) and stops moving. Below that zoom the budget is constant. Harmless now that the ceiling equals the base budget, but it caps how finely the policy can ever respond.",
+    "The 4096-primitive visibility floor is a judgement call, not a measurement: holding density constant is honest all the way down and says to draw single digits, but a graph that thins to one node reads as a bug.",
+    "Node budget is untested above 1M — it is still a no-op at this tier and only starts sampling at §9's 5M tier.",
+    "Edge fill growing with zoom suggests the edge budget should divide by an on-screen-length term rather than multiply by coverage. Not attempted here: the term saturates once edges are clipped by the viewport, so it needs its own calibration."
+  ]
+}
