@@ -522,7 +522,68 @@ levels and reports fps against the on-screen count at each one; those three
 numbers should come from a headed run on the reference laptop before any of
 them is quoted (D5).
 
-**Revisit if:** a deep-zoom frame turns out to be vertex-bound below the 2M
-ceiling (then culling stops being optional); or the node budget starts thinning
-pictures that used to be solid, which would mean the fixed 2.5 px point size,
-not the count, is what needs to move.
+### D13a — the calibration run, and what it overturned (2026-08-01)
+
+The headed run happened. It did not produce three numbers; it produced two
+corrections, because **the premise above is wrong: the fit view is not the most
+expensive frame the app draws.** It is beaten in *both* directions. Full data in
+`bench/results/lod-calibration-medium_csv-2026-08-01.json`.
+
+**Correction 1 — zooming out collapsed the 1M tier, and `f` could not see it.**
+On medium (1M/10M), fit held 57 fps and two wheel notches out fell to 13.9,
+staying at 7.8–13 all the way out — with `drawnNodes`, `drawnEdges` and
+`visibleFraction` bit-identical on every row. The control isolates the driver:
+small (100k nodes, the same 300k edges) holds a flat 60 fps through the same
+sweep. Node quads are sized in *device pixels*, so zooming out does not shrink
+them; it packs the same unshrinking, alpha-blended quads onto a shrinking patch
+of screen, and blended overdraw serialises per pixel. This was invisible to the
+policy by construction — `f` is the share of the graph *inside the viewport*, so
+it saturates at 1 exactly when the graph begins shrinking below the viewport.
+The budget had no lever in the one direction where the renderer was slow, and
+§9's 30 fps floor was being missed by two scroll notches.
+
+The fix is a second term: `coverage`, the graph's on-screen area as a multiple
+of its **fit-view** area, giving `drawn = budget · coverage / f`. Normalising
+against the fit view rather than the viewport matters and is not a detail —
+`Camera.fit` matches the tighter axis and adds a margin, so a square layout in a
+16:10 viewport covers only 0.54 of it at fit. Normalising by viewport area
+thinned the fit view to 541k nodes: the one frame the budget was measured on.
+
+**Correction 2 — there was no zoomed-in headroom to spend.** D13 says zooming
+in should raise the cap because the clipped-away majority stops being paid for.
+That holds for nodes and fails for edges, which are *lines whose on-screen pixel
+length grows with zoom*: the surviving fraction falls, each survivor costs more
+to fill, and the two effects substantially cancel. Minimum fps over a zoom-in
+sweep, by ceiling: 2M → 5.1, 1M → 11.3, 500k → 20.4, 300k → 37.9. So `maxEdges`
+drops 2M → 300k, and the worst frame in the range is about one notch *inside*
+the fit view (coverage 2.03, `f` 0.912) rather than at either extreme.
+
+That leaves `maxEdges === edges`, which is worth stating plainly rather than
+hiding behind two knobs: **at the 1M/10M tier the scaling term can only lower
+the edge count, never raise it.** The ceiling stays a separate knob because it
+binds differently at other tiers.
+
+After both corrections the sweep minimum is 34.8 fps across the full zoom range
+in both directions, against 5.1 before, and the fit view still draws exactly
+D8's cap — the one promise D13 made that survived.
+
+**What this cost, procedurally.** The committed sweep could not have found any
+of this: it never reset to the fit view (so "notches from the fit view" was
+false), and its 3.3× notches jumped clean over the trough, sampling 60 fps on
+both sides of a 5 fps frame. `tests/manual-render.mjs` now resets, sweeps both
+directions at 1.49× notches, and reports `sweepMinFps` as the number that has to
+clear §9 — a fit-view-only measurement is not evidence about the worst frame.
+
+**Still open.** `f` has a resolution floor of one pick-grid cell (it pins at
+2.40e-5 and stops moving), harmless only because the ceiling now equals the base
+budget. The 4096-primitive visibility floor is a judgement call, not a
+measurement. The node budget remains untested above 1M. And the cleanest fix for
+correction 2 — dividing the edge budget by an on-screen-length term instead of
+multiplying by coverage — was not attempted, because that term saturates once
+edges are clipped by the viewport and needs its own calibration.
+
+**Revisit if:** the 5M tier makes the node budget bind, which would test whether
+the fixed 2.5 px point size (not the count) is what needs to move; or a deep-zoom
+frame turns out to be vertex-bound below the *new* 300k ceiling, which would mean
+real culling — a spatial index over the settled layout feeding an indirect draw —
+stops being optional.

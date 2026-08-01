@@ -3,12 +3,12 @@
 // __skeinRender hook. Run HEADED — headless GL is SwiftShader (D3/D5).
 // Usage: node manual-render.mjs [fixture.csv] [seconds]   (preview on :4173)
 //
-// Also sweeps zoom levels and reports fps against the draw budget at each one
-// (D13). That table is the calibration input for DEFAULT_BUDGET in
-// web/src/render/lod.ts: `nodes` and `edges` are the on-screen counts the fit
-// view can hold at the target frame rate, and `maxEdges` is where a deep-zoom
-// frame stops being fill-bound and starts being vertex-bound — visible here as
-// fps falling while the on-screen count is still tiny.
+// Also sweeps zoom levels in both directions and reports fps against the draw
+// budget at each one (D13). That table is the calibration input for
+// DEFAULT_BUDGET in web/src/render/lod.ts, and `sweepMinFps` is the number that
+// has to clear §9's floor — the fit view alone is not the worst frame, in
+// either direction. To recalibrate `maxEdges`, rebuild once per candidate and
+// take the sweep minimum; see bench/results/lod-calibration-*.json.
 import { chromium } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -73,13 +73,26 @@ while (Date.now() < deadline) {
 }
 
 // Zoom sweep: hold a camera, let fps settle, record what the budget spent.
-// Steps are cumulative wheel notches from the fit view; the last one returns
-// to it so a drifted camera cannot be mistaken for a budget effect.
-const zoomLevels = [];
-for (const notches of [0, 2, 4, 6, 8, -8]) {
+//
+// Three things this has to get right, each of which the first version of it got
+// wrong and which cost a calibration run to find:
+//
+//   - **Start from the fit view.** The pan/zoom loop above leaves the camera
+//     wherever it finished, so "notches from the fit view" is a lie unless the
+//     sweep resets first. Zoom is relative and there is no absolute setter, so
+//     reset by stepping back exactly as far as we stepped out.
+//   - **Sweep both directions.** The interesting frames are on both sides: the
+//     zoom-out overdraw collapse and the zoom-in trough one notch inside fit.
+//     A one-directional sweep reports the fit view as the worst frame, which is
+//     the conclusion D13 drew and which is wrong.
+//   - **Small steps.** deltaY 600 is a 3.3x zoom per notch, which jumps clean
+//     over the trough — the first sweep sampled 60 fps on both sides of a 5 fps
+//     frame and reported everything as fine. 200 (1.49x) resolves it.
+const NOTCH = 200;
+const sweepAt = async (notches) => {
   await page.mouse.move(cx, cy);
   for (let n = 0; n < Math.abs(notches); n++) {
-    await page.mouse.wheel(0, notches > 0 ? -600 : 600);
+    await page.mouse.wheel(0, notches > 0 ? -NOTCH : NOTCH);
   }
   // Two full fps windows: the first is polluted by the frames spent zooming.
   await page.waitForTimeout(2200);
@@ -90,10 +103,25 @@ for (const notches of [0, 2, 4, 6, 8, -8]) {
       drawnNodes: s.drawnNodes,
       drawnEdges: s.drawnEdges,
       visibleFraction: s.visibleFraction,
+      coverage: s.coverage,
     };
   });
-  zoomLevels.push({ notches, ...at, onScreenEdges: Math.round(at.drawnEdges * at.visibleFraction) });
+  return { ...at, onScreenEdges: Math.round(at.drawnEdges * at.visibleFraction) };
+};
+
+const zoomLevels = [];
+// Out from fit, one notch at a time, then all the way back.
+zoomLevels.push({ notches: 0, ...(await sweepAt(0)) });
+for (let step = 1; step <= 8; step++) {
+  zoomLevels.push({ notches: -step, ...(await sweepAt(-1)) });
 }
+await sweepAt(8);
+// ...and in from fit, likewise.
+zoomLevels.push({ notches: 0, ...(await sweepAt(0)) });
+for (let step = 1; step <= 8; step++) {
+  zoomLevels.push({ notches: step, ...(await sweepAt(1)) });
+}
+const sweepMinFps = Math.min(...zoomLevels.map((z) => z.fps));
 
 const stats = await page.evaluate(() => window.__skeinRender);
 const heap = await page.evaluate(() => {
@@ -111,6 +139,9 @@ const result = {
   fpsMin: sorted[0],
   fpsMedian: sorted[Math.floor(sorted.length / 2)],
   zoomLevels,
+  // The number the budget is actually calibrated against: §9's floor has to
+  // hold at every camera, not just at the fit view.
+  sweepMinFps,
   usedJSHeapMB: heap,
 };
 

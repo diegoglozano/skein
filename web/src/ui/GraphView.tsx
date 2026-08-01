@@ -13,6 +13,7 @@ import {
   Camera,
   createRenderer,
   lodLimits,
+  screenCoverage,
   shuffleEdgePairs,
   shuffledOrder,
   type DrawLimits,
@@ -79,6 +80,12 @@ interface RenderStats {
   drawnEdges: number;
   /** Share of the graph inside the viewport; 1 until the pick index exists. */
   visibleFraction: number;
+  /**
+   * Share of the viewport the graph's on-screen box covers; 1 at and above the
+   * fit view, falling as you zoom out past it. Distinct from `visibleFraction`,
+   * which saturates exactly where this starts moving.
+   */
+  coverage: number;
 }
 
 declare global {
@@ -205,6 +212,7 @@ export function GraphView({ graph, name, worker, onClose }: {
       drawnNodes: graph.nodeCount,
       drawnEdges: graph.edgeCount,
       visibleFraction: 1,
+      coverage: 1,
     };
     window.__skeinRender = stats;
     const setLayout = (s: string) => {
@@ -257,6 +265,15 @@ export function GraphView({ graph, name, worker, onClose }: {
       // final: the index is two O(n) passes, too much to redo per preview tick.
       let pickIndex: PickIndex | null = null;
       let livePositions: Float32Array | null = null;
+      /**
+       * World-space span of the settled layout plus the zoom the fit view
+       * landed on, kept for the draw budget's `coverage` term (D13). The fit
+       * zoom is the reference point: the budget is a measurement taken there,
+       * so coverage is 1 there and D8's cap comes out unscaled. Null until the
+       * layout finishes, which is the same point the pick index appears —
+       * before that the budget falls back to those fixed caps.
+       */
+      let layoutSpan: { x: number; y: number; fitZoom: number } | null = null;
       let hoverNode = -1;
       let selectedNode = -1;
 
@@ -449,7 +466,22 @@ export function GraphView({ graph, name, worker, onClose }: {
           fraction = visible / graph.nodeCount;
         }
         stats.visibleFraction = fraction;
-        const limits = lodLimits(graph.nodeCount, graph.edgeCount, fraction);
+        // `fraction` saturates at 1 as soon as the graph fits on screen, so on
+        // its own it cannot see the zoom-out direction — where fixed-pixel node
+        // quads pile onto a shrinking patch of screen and blended overdraw is
+        // what costs (D13).
+        const coverage = layoutSpan
+          ? screenCoverage(
+              layoutSpan.x,
+              layoutSpan.y,
+              camera.zoom,
+              layoutSpan.fitZoom,
+              view.widthPx,
+              view.heightPx,
+            )
+          : 1;
+        stats.coverage = coverage;
+        const limits = lodLimits(graph.nodeCount, graph.edgeCount, fraction, coverage);
         stats.drawnNodes = limits.nodeLimit;
         stats.drawnEdges = limits.edgeLimit;
         return limits;
@@ -550,7 +582,10 @@ export function GraphView({ graph, name, worker, onClose }: {
           if (positions[i + 1] < minY) minY = positions[i + 1];
           if (positions[i + 1] > maxY) maxY = positions[i + 1];
         }
-        if (minX < maxX && minY < maxY) camera.fit(minX, minY, maxX, maxY, 1.15);
+        if (minX < maxX && minY < maxY) {
+          camera.fit(minX, minY, maxX, maxY, 1.15);
+          layoutSpan = { x: maxX - minX, y: maxY - minY, fitZoom: camera.zoom };
+        }
         // Explore is live from here: hit-testing needs settled coordinates.
         livePositions = positions;
         pickIndex = buildPickIndex(positions);
