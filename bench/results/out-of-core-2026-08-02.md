@@ -19,14 +19,29 @@ Fixtures are generated, never committed: `node bench/generate-fixtures.mjs mediu
 | hierarchy | 4.71 s | 4.66 s | 5.35–5.63 s |
 | peak RSS | 512 MB | 496 MB | 517 MB |
 | **anonymous memory required** | **650 MB** | **500 MB** | **80 MB** |
+| (largest limit that still aborted) | 600 MB | 400 MB | 60 MB |
+
+**8.1× less RAM required.**
 
 ## `huge` — 10M nodes / 100M edges (1.72 GB CSV)
 
-| | pre-D16 | D16 mmap |
-|---|---|---|
-| ingest (CSV → CSR) | 61.8 s | 61.6 s |
-| hierarchy | 110.0 s | 112.7 s |
-| peak RSS | 5471 MB | 4397 MB |
+| | pre-D16 | D16 heap | D16 mmap |
+|---|---|---|---|
+| ingest (CSV → CSR) | 61.8 s | — | 61.6 s |
+| hierarchy | 110.0 s | — | 112.7 s |
+| peak RSS | 5471 MB | — | 4397 MB |
+| **anonymous memory required** | **6500 MB** | **5500 MB** | **700 MB** |
+| (largest limit that still aborted) | 6000 MB | 4500 MB | 600 MB |
+
+**9.3× less RAM required**, and ~440 MB of that 700 MB is the input CSR the
+harness holds on the heap — `skein-native` maps `<source>.skein` instead, so the
+hierarchy build itself needs on the order of 260 MB to coarsen a 200M-arc level.
+
+Floors are bracketed by the probe steps above, not bisected to the megabyte: each
+figure is the smallest limit tried at which the build completed, with the largest
+one that still aborted underneath it. Timings for the D16 heap tier at this size
+were not taken — the tiers to compare here are the one that shipped before and
+the one this adds.
 
 Hierarchy shape, identical on both:
 

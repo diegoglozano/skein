@@ -217,7 +217,8 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   [`--scratch-dir DIR`] [`--band-mb N`]; **never point it at tmpfs** (swap-backed,
   evicts nothing, looks like it worked). Measured on this container at 1M/10M:
   anonymous memory *required* by the hierarchy build 650 MB → 500 MB (heap) →
-  **80 MB (mmap)**, layout 15–20% slower out-of-core. Peak RSS is the wrong
+  **80 MB (mmap)**, layout 15–20% slower out-of-core; at 10M/100M it is
+  6500 → 5500 → **700 MB** (9.3×) for 2.5% slower. Peak RSS is the wrong
   metric and says the tiers are identical — unconstrained, mapped pages just stay
   resident; see D16.
   Bit-identity is the constraint: the same reference implementation the D15/N2

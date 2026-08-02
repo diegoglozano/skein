@@ -1187,7 +1187,26 @@ comes from.
 
 Layout is 15–20% slower out-of-core at this size, from the extra emit passes and
 page faults. That is the trade being bought, and it only applies when the flag is
-on.
+on. It shrinks with scale: at `huge` the same comparison is 110.0 s → 112.7 s,
+2.5%, because the sort and propagation work grows faster than the paging does.
+
+### And at the tier this exists for — `huge`, 10M nodes / 100M edges
+
+| | pre-D16 | D16 heap | D16 mmap |
+|---|---|---|---|
+| hierarchy | 110.0 s | — | 112.7 s |
+| peak RSS | 5471 MB | — | 4397 MB |
+| **anonymous memory required** | **6500 MB** | **5500 MB** | **700 MB** |
+
+**9.3×.** A 100M-edge graph coarsens in 700 MB of anonymous memory, and ~440 MB
+of that is the input CSR the `skein-core` harness holds on the heap because it
+has no store — `skein-native` maps it, so the hierarchy build proper is on the
+order of 260 MB to produce and hold a 200M-arc level 0. The four levels are
+byte-identical to the ones the pre-D16 code produces.
+
+That is the claim D15 could not make: N2's store gave instant reopen and 3% of
+the memory it was expected to, and this is where the capacity actually came
+from.
 
 ### Do not put the scratch on tmpfs
 
