@@ -1431,6 +1431,27 @@ Worth knowing before making it: **CI has no WebGPU**, so under SwiftShader the
 backend. Those pairs are near-duplicates in CI and only diverge on real
 hardware (D3).
 
+**Result**, same machine and worker count as the baseline above, 25/25 passing:
+
+| | test time | wall |
+| --- | --- | --- |
+| baseline | 1160.5s | 614.6s |
+| shared setup + `settle` at two frames | 963.6s | 533.9s |
+| + CDP capture | **899.4s** | **499.2s** |
+
+—22.5% of test time, —19% of wall. By spec: `attributes.spec.ts` 555.1s ->
+338.1s (—39%), `explore.spec.ts` 145.8s -> 102.8s (—29%), everything untouched
+within ±4%, which is this container's noise. Dropping the spike entry also took
+~700 kB out of `web/dist` (cosmos.gl plus luma.gl's WebGL device) and the vite
+step from 4.50s to 2.65s.
+
+Scaled onto the CI numbers this section opened with, the `web` job's test step
+should go from 8m33s to roughly 6m55s and the run from 9m36s to about 7m50s.
+That is the honest ceiling for this pass: what remains is `lod` (146s, inherent
+— `small` is the smallest fixture where the draw budget is observable at all),
+the two `no-network` runs (173s across both projects), and nine styled captures
+that are irreducibly ~3s each until CI has a GPU.
+
 **Revisit if:** the suite grows another DuckDB-dependent spec (share the group
 rather than adding an eighth cold start), someone proposes an fps-driven or
 viewport-driven speedup (both measured, both buy nothing — see above), or CI
