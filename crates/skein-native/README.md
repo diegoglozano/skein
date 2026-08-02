@@ -91,6 +91,41 @@ is capacity and layout speed, neither of which is improved by drawing the
 sidebar in egui rather than HTML. What exists is pan, zoom, a title-bar HUD, and
 CLI flags. Treat missing UI as a decision, not an omission.
 
+## Install
+
+Released separately from the web app, on its own tag and its own two targets:
+`skein-native-vX.Y.Z-...` builds `aarch64-apple-darwin` and
+`x86_64-apple-darwin`, while `vX.Y.Z` builds the six-target `skein` binary and
+never touches this crate. The two versions are independent on purpose.
+
+Releases here are **prereleases**, and the version suffix is what makes them so.
+GitHub's `/releases/latest` skips prereleases, and README.md's install command
+points at `releases/latest/download/skein-installer.sh` — so a full release of
+this crate would make itself "latest" and 404 that URL for everyone installing
+the web app. The suffix in `version` is load-bearing; keep it until this front
+end is something people are meant to find first.
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/diegoglozano/skein/releases/download/skein-native-v0.1.0-alpha.1/skein-native-installer.sh | sh
+```
+
+No `latest` URL for the same reason — a prerelease is never `latest`, so the
+tag is spelled out.
+
+**The binaries are unsigned.** Nobody here has an Apple Developer ID, so there
+is no codesigning and no notarization. Installing with the command above is
+fine: `curl` does not set `com.apple.quarantine`, so Gatekeeper never looks.
+Downloading the `.tar.xz` from the GitHub web UI *is* quarantined, and macOS
+will refuse to open it — clear the flag by hand:
+
+```sh
+xattr -d com.apple.quarantine ./skein-native
+```
+
+Prefer the installer, and treat the browser download as the path that needs the
+extra step.
+
 ## Usage
 
 ```sh

@@ -12,21 +12,34 @@
 #
 # This does re-run the web build once per target. It is ~1 minute against
 # several minutes of Rust compilation, and it keeps each runner self-contained.
+#
+# Every step is skipped for a `skein-native-*` tag. That app is the other front
+# end (D15) — no WASM, no bundle, nothing for npm to do — and these steps are
+# injected into *the* build job, which serves whichever package is being
+# released. Without the guard a native release would run wasm-pack and vite on
+# both macOS runners and then fail on the bundle check for a binary that has no
+# bundle in it. `github.ref_name` is the tag that triggered the workflow.
 - name: Install Node
+  if: ${{ !startsWith(github.ref_name, 'skein-native-') }}
   uses: actions/setup-node@v4
   with:
     node-version: 22
     cache: npm
 - name: Install wasm-pack
+  if: ${{ !startsWith(github.ref_name, 'skein-native-') }}
   uses: taiki-e/install-action@v2
   with:
     tool: wasm-pack
 - name: Add wasm target
+  if: ${{ !startsWith(github.ref_name, 'skein-native-') }}
   run: rustup target add wasm32-unknown-unknown
 - name: Install npm dependencies
+  if: ${{ !startsWith(github.ref_name, 'skein-native-') }}
   run: npm ci
 - name: Build the web bundle
+  if: ${{ !startsWith(github.ref_name, 'skein-native-') }}
   run: npm run build
 - name: Fail if the bundle is missing
+  if: ${{ !startsWith(github.ref_name, 'skein-native-') }}
   shell: bash
   run: test -f web/dist/index.html

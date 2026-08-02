@@ -43,6 +43,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p skein-native --all-targets -- -D warnings
       - run: cargo test -p skein-native
+      # skein-native releases to both macOS architectures, and the runner is
+      # only one of them. Nothing else in CI or in a `skein` release ever builds
+      # the Intel target, so without this the first x86_64 compile of this crate
+      # would be the release itself — the same "the release path is the only
+      # thing that exercises the release path" gap that CLAUDE.md warns about.
+      - run: rustup target add x86_64-apple-darwin
+      - run: cargo check -p skein-native --target x86_64-apple-darwin
 
   web:
     runs-on: ubuntu-latest

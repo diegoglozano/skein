@@ -1,6 +1,11 @@
 [package]
 name = "skein-native"
-version = "0.1.0"
+# The `-alpha` is load-bearing, not modesty. dist marks a release prerelease
+# when the version carries a suffix, and GitHub excludes prereleases from
+# `/releases/latest` — which is the URL README.md's install command depends on.
+# Ship this as a full release and it becomes "latest", and
+# `releases/latest/download/skein-installer.sh` starts 404ing for everyone.
+version = "0.1.0-alpha.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -16,16 +21,19 @@ wgpu = "30.0.0"
 winit = "0.30.13"
 
 [package.metadata.dist]
-# Not released. dist's default for a package with a binary is dist-able, and
-# silence here is not neutral: `dist plan` picked this crate up as a *second*
-# app and planned `skein-native-installer.sh` plus tarballs for all six targets
-# in dist-workspace.toml — including x86_64-unknown-linux-musl and Windows, for
-# a macOS-only front end (D15) that the Linux CI jobs deliberately skip.
-# skein-core and skein-wasm say `dist = false` for the same reason; this crate
-# arrived after them and did not.
+# Released, but on its own tag and its own two targets — never with `skein`.
 #
-# It also unbreaks the tag. With two dist-able packages on different versions,
-# an unqualified `v<x.y.z>` tag only announces the packages actually at that
-# version — so before this line, `dist plan --tag=v0.3.0` failed outright with
-# "This workspace doesn't have anything for dist to Release!".
-dist = false
+# Both halves matter. dist's default for a package with a binary is dist-able
+# *for every target in dist-workspace.toml*, which for this crate meant Windows
+# and linux-musl builds of a macOS-only front end (D15) that the Linux CI jobs
+# deliberately skip. And because an unqualified `v<x.y.z>` tag announces every
+# dist-able package at that version, leaving the versions to converge would one
+# day sweep this crate into a `skein` release by accident.
+#
+# The versions are therefore deliberately independent, and each app is released
+# by a package-qualified tag: `v0.3.0` for skein, `skein-native-v0.1.0-alpha.1`
+# for this one. See the version field above for why the suffix is required.
+dist = true
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+# No PowerShell installer: there is no Windows target to install.
+installers = ["shell"]

@@ -133,20 +133,26 @@ jobs:
           fi
       - name: "Install Node"
         uses: "actions/setup-node@v4"
+        if: "${{ !startsWith(github.ref_name, 'skein-native-') }}"
         with:
           "cache": "npm"
           "node-version": 22
       - name: "Install wasm-pack"
         uses: "taiki-e/install-action@v2"
+        if: "${{ !startsWith(github.ref_name, 'skein-native-') }}"
         with:
           "tool": "wasm-pack"
       - name: "Add wasm target"
+        if: "${{ !startsWith(github.ref_name, 'skein-native-') }}"
         run: "rustup target add wasm32-unknown-unknown"
       - name: "Install npm dependencies"
+        if: "${{ !startsWith(github.ref_name, 'skein-native-') }}"
         run: "npm ci"
       - name: "Build the web bundle"
+        if: "${{ !startsWith(github.ref_name, 'skein-native-') }}"
         run: "npm run build"
       - name: "Fail if the bundle is missing"
+        if: "${{ !startsWith(github.ref_name, 'skein-native-') }}"
         run: "test -f web/dist/index.html"
         shell: "bash"
       - name: Install dist

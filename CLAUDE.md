@@ -314,7 +314,18 @@ its numbers for performance decisions (D3/D5).
   release list is the only place a stray dist-able crate shows up. A new crate
   with a `main.rs` is dist-able **by default** — give it
   `[package.metadata.dist] dist = false` unless you mean to ship it.
-- Releases are versioned on the `skein` package in `crates/skein-cli`, not on
-  the workspace: the other three crates hold their own versions and are never
-  released. Bump `crates/skein-cli/Cargo.toml` (and let `Cargo.lock` follow)
-  before tagging.
+- **Two release tracks, never one.** Versions live on packages, not the
+  workspace, and the two shipped apps are tagged independently:
+  `vX.Y.Z` releases `skein` (crates/skein-cli) for six targets;
+  `skein-native-vX.Y.Z-...` releases `skein-native` for the two macOS targets.
+  Bump the one package's `Cargo.toml` (let `Cargo.lock` follow) and tag. Do not
+  let the versions converge — an unqualified `vX.Y.Z` announces *every*
+  dist-able package at that version, so equal versions would silently ship both.
+  skein-native's version keeps a `-alpha.N` suffix on purpose: dist marks
+  suffixed versions prerelease, GitHub keeps prereleases out of
+  `/releases/latest`, and README.md's install command reads
+  `releases/latest/download/skein-installer.sh`. A full native release would
+  steal `latest` and 404 that URL.
+- `.github/build-setup.yml` skips its npm steps for `skein-native-*` tags. It is
+  injected into *the* release build job, which serves whichever package is being
+  released, and skein-native has no web bundle to build.
