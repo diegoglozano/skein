@@ -12,8 +12,11 @@ mod ingest;
 mod interner;
 mod layout;
 
-pub use coarsen::{build_hierarchy, coarsen_once, symmetrize, HierarchyLevel};
-pub use csr::Csr;
+pub use coarsen::{
+    build_hierarchy, build_hierarchy_view, coarsen_once, symmetrize, symmetrize_view,
+    HierarchyLevel,
+};
+pub use csr::{Csr, CsrView};
 pub use csv::CsvScanner;
 pub use explore::{neighbors, total_degrees};
 pub use ingest::{EdgeIngest, IngestConfig, IngestOutput};

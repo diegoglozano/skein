@@ -178,6 +178,30 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   3.3× notches straddled the trough — so `tests/manual-render.mjs` now resets,
   sweeps both ways at 1.49× notches, and reports `sweepMinFps`.
 - **M5:** not started; see §11 — distribution (D10) is already done.
+- **skein-native — a second, macOS-only front end (D13, 2026-08-02).** Parallel
+  track; the web app is untouched and stays primary. `crates/skein-native` is a
+  winit window on a wgpu/Metal surface with no browser, no webview and no WASM,
+  built for graphs past §8's 4 GB wasm cap. Ported from the web tier: both WGSL
+  shaders **verbatim** (diff them before debugging a visual difference) and
+  `camera.ts`; everything else is `skein-core` unchanged. The force sim runs on
+  the *renderer's* device, so positions never leave GPU memory. `store.rs`
+  persists the CSR in its in-memory layout as `<source>.skein` and mmaps it, fed
+  to the hierarchy through `skein-core`'s new `CsrView`/`build_hierarchy_view`.
+  Real hardware (M3 Air, headed): `medium` 1M/10M lays out in **5.8 s** vs the
+  browser's ~11 s; **`huge` 10M/100M** (1.72 GB CSV — a tier the browser cannot
+  open at all) ingests in 29 s, lays out in 89 s, peak RSS 7.8 GB, no swapping,
+  and reopens from a warm store in **0.95 s**. Deliberately has **no UI** —
+  pan, zoom, a title-bar HUD and CLI flags; the egui port was dropped when the
+  render path measured no faster than the browser's (that is the whole of D13's
+  scope cut, and it is a decision rather than an omission). CI builds it in a
+  `native` job on macOS and *excludes* it from the Linux jobs.
+- **`skein-core::coarsen` rewritten as a counting sort (D13/N2).** `symmetrize`
+  and `coarsen_once` no longer materialise a `Vec<(u64, f32)>` per edge; they
+  stream triples into `build_dedup_counting`. Halved peak memory at 1M/10M
+  (2.33 → 1.18 GB) and made the hierarchy 1.4× faster. This is **shared code the
+  browser runs**: the pre-rewrite implementation is kept verbatim in the test
+  module and three tests assert `f32` **bit** equality against it, because a
+  different summation order is a different graph (D2).
 
 M0 facts worth keeping: headless Chromium falls back to SwiftShader even on
 GPU machines — real-hardware runs must be headed; cosmos.gl 3.4 is luma.gl 9
@@ -201,6 +225,12 @@ cargo run --release --example bench | node bench/compare-bench.mjs   # ratio gat
 cargo run --release --example layout_tune    # force-param calibration (separation metrics)
 node tests/manual-explore.mjs medium.csv     # M4 pick/search/neighbour timings (headed, preview on :4173)
 node tests/manual-demo.mjs clustered.csv     # re-record the README GIF (headed; ffmpeg)
+
+# skein-native (macOS only, D13) — see crates/skein-native/README.md for flags
+npm run fixtures -- huge                     # 10M/100M, ~1.7 GB, native-only tier
+cargo run -p skein-native --release -- bench/fixtures/medium.csv
+cargo run -p skein-native --release -- bench/fixtures/medium.csv --sweep
+cargo test -p skein-native                   # excluded from the Linux CI jobs
 ```
 
 In managed/remote environments, point Playwright at the pre-installed browser:

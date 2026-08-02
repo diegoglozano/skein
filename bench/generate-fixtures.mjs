@@ -7,7 +7,7 @@
 //   - {name}-nodes.csv  node attributes, the D4 second file (M4)
 //
 // Usage: node bench/generate-fixtures.mjs [preset ...]
-// Presets: tiny (10k/50k), small (100k/500k), medium (1M/10M)
+// Presets: tiny (10k/50k), small (100k/500k), medium (1M/10M), huge (10M/100M)
 
 import { createWriteStream, mkdirSync } from 'node:fs';
 import { once } from 'node:events';
@@ -20,6 +20,9 @@ const PRESETS = {
   tiny: { nodes: 10_000, edges: 50_000 },
   small: { nodes: 100_000, edges: 500_000 },
   medium: { nodes: 1_000_000, edges: 10_000_000 },
+  // The scale skein-native exists for (DECISIONS.md D13): past the browser's
+  // 4 GB wasm cap, so this one is native-only. ~1.6 GB of CSV — never committed.
+  huge: { nodes: 10_000_000, edges: 100_000_000 },
   // Planted communities: layout quality is judged visually on this one —
   // a correct force layout must separate the clusters (M3).
   clustered: { nodes: 20_000, edges: 120_000, communities: 40, pIntra: 0.92 },

@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/skein-cli", "crates/skein-core", "crates/skein-wasm"]
+members = [
+    "crates/skein-cli",
+    "crates/skein-core",
+    "crates/skein-native",
+    "crates/skein-wasm",
+]
 
 [profile.release]
 lto = "thin"
