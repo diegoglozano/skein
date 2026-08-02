@@ -5,6 +5,11 @@ dictionary to OPFS (M1). `opfs.ts` owns the on-disk formats and the
 recent-graphs listing; `protocol.ts` is the main-thread ↔ worker message
 contract, including the fixed ingest column mapping.
 
+`generate.ts` synthesizes a sample graph for a device that has no data on it,
+and hands it to the same ingest routine as a dropped file — CSV bytes in, no
+shortcut past the parser (D17). It is a copy of `bench/generate-fixtures.mjs`
+and must stay one; `tests/generate.spec.ts` is what enforces that.
+
 The worker also serves the graph queries that need the whole CSR: `load` ships
 render buffers plus the dictionary and a degree column, and `neighbors` answers
 the M4 selection query. Both call into `skein-core` — algorithms do not live

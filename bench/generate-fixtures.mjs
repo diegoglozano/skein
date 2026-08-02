@@ -8,6 +8,12 @@
 //
 // Usage: node bench/generate-fixtures.mjs [preset ...]
 // Presets: tiny (10k/50k), small (100k/500k), medium (1M/10M), huge (10M/100M)
+//
+// `web/src/workers/generate.ts` is a copy of the RNG and both graph generators
+// below, so the app can make the same graphs on a device that has no files on
+// it (DECISIONS.md D17). Change anything here that affects the *output* — the
+// RNG, the attachment rule, the id spelling, the row order — and change it
+// there too; `tests/generate.spec.ts` fails when they disagree.
 
 import { createWriteStream, mkdirSync } from 'node:fs';
 import { once } from 'node:events';

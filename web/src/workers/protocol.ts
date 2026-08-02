@@ -24,7 +24,10 @@ export const DEFAULT_INGEST_OPTIONS: IngestOptions = {
   delimiter: ',',
 };
 
-export type IngestStage = 'parse' | 'build' | 'persist';
+/** `generate` only appears for a synthetic sample graph (`generate.ts`); the
+ * three that follow it are the §4.1 pipeline stages a real file goes through,
+ * and a generated graph goes through them too. */
+export type IngestStage = 'generate' | 'parse' | 'build' | 'persist';
 
 export interface GraphSummary {
   id: string;
@@ -43,6 +46,9 @@ export interface GraphSummary {
 
 export type ToWorker =
   | { type: 'ingest'; file: File; options: IngestOptions }
+  /** Synthesize a sample graph of the named size and ingest it, for a device
+   * that has no data on it (`generate.ts` has the presets). */
+  | { type: 'generate'; preset: string }
   | { type: 'list' }
   | { type: 'verify'; id: string }
   | { type: 'load'; id: string }

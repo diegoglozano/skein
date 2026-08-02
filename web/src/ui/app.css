@@ -81,6 +81,66 @@ h1 {
   font-size: 0.9rem;
 }
 
+/* Sample generation (no data on the device — see workers/generate.ts). Sized
+   for a thumb: full-width rows on a phone, inline on a wide screen. */
+.samples {
+  margin-top: 2.5rem;
+  text-align: left;
+}
+
+.samples h2 {
+  font-size: 0.95rem;
+  color: #8a8fa3;
+}
+
+.samples ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.samples li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.samples button {
+  flex: 0 0 auto;
+  min-width: 15rem;
+  padding: 0.55rem 1rem;
+  border: 1px solid #3a3f55;
+  border-radius: 8px;
+  background: #11131c;
+  color: #9fb6ff;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.samples button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.samples .muted {
+  color: #8a8fa3;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 30rem) {
+  .dropzone {
+    padding: 2rem 1rem;
+  }
+
+  .samples button {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}
+
 .progress,
 .summary {
   margin-top: 1.5rem;

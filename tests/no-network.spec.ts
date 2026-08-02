@@ -5,7 +5,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dropFixture } from './helpers';
+import { dropFixture, generateSample } from './helpers';
 
 const NODE_ATTRS = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -31,6 +31,14 @@ test('app makes no off-origin requests', async ({ page, baseURL }) => {
   // Exercise what UI exists; grows with the app.
   await page.getByRole('button', { name: /your data never leaves/i }).click();
   await expect(page.getByText('Verify it yourself')).toBeVisible();
+
+  // Sample generation is the one feature that would be trivially tempting to
+  // implement as a download ("fetch a demo dataset"), so it is exercised here:
+  // the graph must be synthesized in the tab.
+  await generateSample(page, 'tiny');
+  await expect(page.getByTestId('ingest-summary')).toContainText('10,000 nodes', {
+    timeout: 60_000,
+  });
 
   // The guarantee must hold under load, not just at rest: run the full ingest
   // pipeline (worker + WASM fetch + OPFS writes) on a real file.
