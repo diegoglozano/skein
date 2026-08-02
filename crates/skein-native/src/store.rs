@@ -250,6 +250,43 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// The composition `--out-of-core` actually runs: a memory-mapped store
+    /// feeding a hierarchy whose own arrays are in memory-mapped scratch
+    /// (D16). Two mappings and no `Vec` for anything edge-sized — worth a test
+    /// of its own, because each half is covered elsewhere and the seam is not.
+    #[test]
+    fn hierarchy_over_a_mapped_store_matches_the_heap() {
+        // Enough structure to coarsen at least once, so the test covers a
+        // coarse level's allocation and not only symmetrize's.
+        let n = 600u32;
+        let sources: Vec<u32> = (0..n - 1).collect();
+        let targets: Vec<u32> = (1..n).collect();
+        let csr = Csr::from_edges(n, &sources, &targets, None);
+
+        let path = temp("out-of-core");
+        write(&path, &csr, b"", &vec![0u32; n as usize + 1]).unwrap();
+        let store = Store::open(&path).unwrap();
+
+        let dir = std::env::temp_dir();
+        let scratch = skein_core::MmapScratch::new(&dir, 1 << 16).min_mapped(0);
+        let got = skein_core::build_hierarchy_in(store.csr(), 50, 8, &scratch).unwrap();
+        let want = skein_core::build_hierarchy(&csr, 50, 8);
+
+        assert!(want.len() >= 2, "need a coarse level for this to be a test");
+        assert_eq!(got.len(), want.len());
+        for (li, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(g.parent_map, w.parent_map, "L{li} parent map");
+            assert_eq!(g.graph.offsets, w.graph.offsets, "L{li} offsets");
+            assert_eq!(g.graph.targets(), w.graph.targets(), "L{li} targets");
+            // Bit equality: a different f32 summation order is a different
+            // layout (D2), which is the whole constraint on D16.
+            for (i, (a, b)) in g.graph.weights().iter().zip(w.graph.weights()).enumerate() {
+                assert_eq!(a.to_bits(), b.to_bits(), "L{li} weight {i}");
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn rejects_foreign_and_truncated_files() {
         let path = temp("bad");
