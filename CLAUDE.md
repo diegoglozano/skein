@@ -305,3 +305,16 @@ its numbers for performance decisions (D3/D5).
   interning quadratic once already (see commit history).
 - CI's bench ratio gate is warn-only until a baseline generated on the CI
   runner class is committed.
+- **Nothing in CI touches the release path.** No job runs `dist plan` and none
+  builds the `skein` binary with `web/dist` embedded, so a release-only breakage
+  stays invisible until the tag is pushed — which is how v0.1.0 shipped without
+  `[profile.dist]`, and how `skein-native` came to be planned as a second
+  released app for all six targets. Before tagging, run `dist plan --tag=vX.Y.Z`
+  locally: it exits non-zero when no package carries that version, and its
+  release list is the only place a stray dist-able crate shows up. A new crate
+  with a `main.rs` is dist-able **by default** — give it
+  `[package.metadata.dist] dist = false` unless you mean to ship it.
+- Releases are versioned on the `skein` package in `crates/skein-cli`, not on
+  the workspace: the other three crates hold their own versions and are never
+  released. Bump `crates/skein-cli/Cargo.toml` (and let `Cargo.lock` follow)
+  before tagging.

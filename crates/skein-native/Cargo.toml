@@ -14,3 +14,18 @@ pollster = "1.0.1"
 skein-core = { path = "../skein-core" }
 wgpu = "30.0.0"
 winit = "0.30.13"
+
+[package.metadata.dist]
+# Not released. dist's default for a package with a binary is dist-able, and
+# silence here is not neutral: `dist plan` picked this crate up as a *second*
+# app and planned `skein-native-installer.sh` plus tarballs for all six targets
+# in dist-workspace.toml — including x86_64-unknown-linux-musl and Windows, for
+# a macOS-only front end (D15) that the Linux CI jobs deliberately skip.
+# skein-core and skein-wasm say `dist = false` for the same reason; this crate
+# arrived after them and did not.
+#
+# It also unbreaks the tag. With two dist-able packages on different versions,
+# an unqualified `v<x.y.z>` tag only announces the packages actually at that
+# version — so before this line, `dist plan --tag=v0.3.0` failed outright with
+# "This workspace doesn't have anything for dist to Release!".
+dist = false
