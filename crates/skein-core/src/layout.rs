@@ -570,11 +570,7 @@ impl MultilevelLayout {
         while used < budget.max(1) {
             if self.iter < self.iters {
                 let level = &self.levels[self.li].graph;
-                let graph = LevelGraph::new(
-                    &level.offsets,
-                    &level.targets,
-                    level.weights.as_deref().unwrap_or(&[]),
-                );
+                let graph = LevelGraph::new(&level.offsets, level.targets(), level.weights());
                 // Disjoint field borrows: graph reads `levels`, the sim and
                 // positions are separate fields.
                 let sim = self.sim.as_mut().expect("sim exists while iters remain");

@@ -464,13 +464,12 @@ impl GpuMultilevel {
         self.iters = iters;
         self.iter = 0;
 
-        let empty: &[f32] = &[];
         self.sim = Some(LevelSim::new(
             &self.device,
             &self.programs,
             &level.graph.offsets,
-            &level.graph.targets,
-            level.graph.weights.as_deref().unwrap_or(empty),
+            level.graph.targets(),
+            level.graph.weights(),
             &self.positions,
             self.params,
             LevelSchedule::for_level(n, self.li == count - 1),

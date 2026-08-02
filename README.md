@@ -83,7 +83,7 @@ imports it like any file. Nothing is downloaded; the edges are synthesized on
 your device, which is the only way to hand you a sample without breaking the
 promise in the badge. They are the same graphs `bench/generate-fixtures.mjs`
 writes, edge for edge, so a screenshot or a timing of `small` means the same
-thing whichever side produced it (docs/DECISIONS.md D16). This is how to try
+thing whichever side produced it (docs/DECISIONS.md D17). This is how to try
 skein on a phone.
 
 IDs are arbitrary strings; they're interned, so numeric and textual IDs both
@@ -160,6 +160,8 @@ that determinism is end-to-end tested across fresh browser contexts
 crates/skein-core/   Rust: ID interning, CSV scanner, CSR, coarsening — tested natively
 crates/skein-wasm/   wasm-bindgen boundary (thin; algorithms stay in core)
 crates/skein-cli/    the `skein` binary: embeds web/dist and serves it
+crates/skein-native/ macOS-only second front end: winit + wgpu, no browser (D15),
+                     and the out-of-core tier for graphs past the wasm cap (D16)
 web/src/workers/     ingest worker: File.stream() → WASM → CSR + OPFS
 web/src/render/      WebGPU renderer with a WebGL2 fallback, shared flat buffers
 web/src/layout/      multilevel force sim: WGSL compute, plus a CPU reference

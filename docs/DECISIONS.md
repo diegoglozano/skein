@@ -1081,7 +1081,177 @@ need), not as a rider on this change.
 **Revisit when:** skein-native grows a pick grid, or a user reports the zoomed-
 out trough on real data.
 
-## D16 — Sample graphs are generated in the tab, and are the fixture graphs
+## D16 — The hierarchy build streams; edge-sized arrays become a storage policy
+
+D15/N2 closed with a named next step: "Peak memory at this tier is `symmetrize`,
+and the remaining leverage is making that streaming rather than shaving the load
+path further." REQUIREMENTS.md §4.2 says the same thing from the other side —
+at 100M edges the CSR is ~800 MB, "which is the point where streaming stops
+being optional". This is that work.
+
+**Decision.** Where the hierarchy build puts the arrays that scale with *edge*
+count is a policy, not a hard-coded `Vec`. `skein-core::scratch` defines
+`Scratch`/`Slab`; `HeapScratch` is the default and the only thing wasm can use
+(§8); `MmapScratch` puts the same arrays in memory-mapped files. `HierarchyLevel`
+holds a `CsrBuf` — offsets still a `Vec`, targets and weights wherever the
+scratch put them. Everything reaching for a level goes through `CsrView`, which
+D15 already introduced.
+
+### Why file-backed is the whole difference
+
+A 1.6 GB anonymous allocation can only go to swap. The same 1.6 GB in a file
+mapping can be written back and evicted, and re-read on demand. Nothing else
+about the algorithm changes; the pages just become reclaimable.
+
+That is only *usable* because of an access-pattern property worth stating
+plainly, since it is what makes out-of-core viable here and would not hold for
+an arbitrary graph algorithm: **every pass over an edge-sized array walks it in
+CSR row order.** Label propagation reads `sym.targets[e]` sequentially and
+indexes `labels[]` randomly; the aggregation pass does the same; the force sim
+reads each node's row in order. Everything random-access — labels, cluster
+sizes, vote scratch, positions, offsets — is node-sized. So the resident working
+set is O(nodes) and the streamed set is O(edges), which is exactly the shape a
+graph too large for RAM needs.
+
+### Two changes, not one
+
+**`build_dedup_counting` becomes `build_dedup_banded`.** The D15/N2 version
+allocated an intermediate `Vec<(u32, f32)>` of every triple *and* the output, so
+the finest level cost 16 bytes per symmetrized arc. The new one writes each
+band's triples directly into the output arrays at their pre-dedup positions, then
+sorts and merges each row forward over the same region — dedup only shrinks a
+row, so the compacting write cursor never overtakes the read position. Two
+allocations instead of three, 8 bytes per arc instead of 16.
+
+**Bands** are a locality device, not a capacity one. A band is a run of
+consecutive rows holding at most `scratch.band_len()` triples; only that band's
+region of the output is being written at any moment, which bounds the dirty
+window over a mapping. `emit` now receives the row range so it can skip work
+rather than have the builder filter it — without that, a banded build re-scans
+the whole input per band through a `dyn FnMut`, and the extra passes dominate.
+`HeapScratch` uses one band, so the heap path does exactly what it did before:
+two emit passes, same allocations, same output.
+
+### Bit-identity, which is the constraint (D2)
+
+The same discipline D11 used before deleting `cpu.ts` and D15/N2 used for the
+counting sort: the pre-counting-sort implementation is still in the test module
+as `build_dedup_reference`/`symmetrize_reference`, and the tests now assert `f32`
+**bit** equality against it across *every* storage policy — heap, forced bands of
+1/3/17/1024 rows' worth of triples, and mmap — for random weighted and unweighted
+graphs, hub-and-isolated-node shapes, a full `coarsen_once`, and a complete
+multi-level hierarchy. A band size of 1 is in there deliberately: it makes every
+row its own band, which is the case a boundary bug would survive larger bands.
+
+At real scale the harness prints an FNV checksum per level. `medium` 1M/10M
+produces identical checksums on all four levels across the pre-D16 code, the new
+heap path and the mmap path. A different `f32` summation order would be a
+different layout, so this is the claim that matters most.
+
+### Measured (this container: 4 cores, 15 GB, `medium` 1M/10M)
+
+Not the reference laptop — these are ratios and thresholds on commodity Linux,
+which is what this particular claim needs, rather than the absolute timings D15
+took on the M3 Air.
+
+| | pre-D16 | D16 heap | D16 mmap |
+|---|---|---|---|
+| hierarchy | 4.71 s | 4.66 s | 5.35–5.63 s |
+| peak RSS | 512 MB | 496 MB | 517 MB |
+| **anonymous memory required** | **650 MB** | **500 MB** | **80 MB** |
+
+**Peak RSS is the wrong metric here, and running the two tiers unconstrained
+will say they are identical.** With 15 GB free the kernel has no reason to evict
+anything, so mapped pages stay resident and count toward RSS exactly as
+anonymous ones do. The difference is not how much is resident, it is whether it
+*has to be*.
+
+The bottom row is that question, and it is the result: the smallest
+`RLIMIT_DATA` at which the build completes instead of aborting in the allocator.
+`RLIMIT_DATA` bounds anonymous mappings and deliberately does not bound
+file-backed ones, which makes it exactly the discriminator. The harness applies
+it *after* ingest and after `malloc_trim`, so it measures the hierarchy build
+rather than the pipeline — at the 100M tier ingest's own transient is larger
+than anything the hierarchy needs out-of-core, and a process-wide `ulimit -d`
+would measure only that. **8.1× less RAM required**, and what remains is the
+node-sized arrays plus the input CSR, which `skein-native` would have mmap'd
+rather than allocated.
+
+The heap path's own improvement is smaller than the arithmetic suggests (650 →
+500 MB, not 2×) and the reason is worth recording: the intermediate array this
+change removed was only the *peak* at level 0, and at this graph's shape the
+global peak is at level 2, where three levels are live at once and the old
+output `Vec::with_capacity` never touched its slack. Halving level 0's transient
+moved the global peak by a fifth. The mmap tier is where the capacity actually
+comes from.
+
+Layout is 15–20% slower out-of-core at this size, from the extra emit passes and
+page faults. That is the trade being bought, and it only applies when the flag is
+on. It shrinks with scale: at `huge` the same comparison is 110.0 s → 112.7 s,
+2.5%, because the sort and propagation work grows faster than the paging does.
+
+### And at the tier this exists for — `huge`, 10M nodes / 100M edges
+
+| | pre-D16 | D16 heap | D16 mmap |
+|---|---|---|---|
+| hierarchy | 110.0 s | — | 112.7 s |
+| peak RSS | 5471 MB | — | 4397 MB |
+| **anonymous memory required** | **6500 MB** | **5500 MB** | **700 MB** |
+
+**9.3×.** A 100M-edge graph coarsens in 700 MB of anonymous memory, and ~440 MB
+of that is the input CSR the `skein-core` harness holds on the heap because it
+has no store — `skein-native` maps it, so the hierarchy build proper is on the
+order of 260 MB to produce and hold a 200M-arc level 0. The four levels are
+byte-identical to the ones the pre-D16 code produces.
+
+That is the claim D15 could not make: N2's store gave instant reopen and 3% of
+the memory it was expected to, and this is where the capacity actually came
+from.
+
+### Do not put the scratch on tmpfs
+
+`/tmp` is tmpfs on most Linux installs, and tmpfs pages are backed by swap rather
+than a disk — a scratch file there is page cache that can only be evicted to swap,
+or on a swapless machine not at all. It would look like it worked and reclaim
+nothing. So the scratch directory is a caller argument with no temp-dir default,
+and both entry points default it to the directory the graph came from (beside
+`<source>.skein`, which is already known to have room for this graph).
+
+### Scope, honestly
+
+- **Opt-in, not inferred.** `skein-native --out-of-core`. Choosing it from free
+  memory would mean a wrong guess silently takes the slower path, and D5's rule
+  is that the tier a run used should be a stated fact.
+- **The browser is untouched.** wasm has one linear memory and no files (§8);
+  `MmapScratch` does not compile there and the web path still gets
+  `HeapScratch`, byte for byte what it got before. §4.2's OPFS-streaming note
+  remains open for the browser tier and is a different piece of work.
+- **Node count still bounds RAM.** ~12 bytes per node of build scratch plus the
+  layout's positions. At 10M nodes that is a few hundred MB, so the ceiling this
+  moves is edges, not nodes.
+- **~4.29B arcs is the format's ceiling**, not this function's — §4.2 makes CSR
+  offsets `u32`. It is now an explicit assert with a message rather than a silent
+  wrap.
+- **Ingest is the next anonymous transient**, and it is now the largest one in
+  the native pipeline: building the CSR from a 1.72 GB CSV peaked at 1366 MB
+  here. It is a one-time phase — D15/N2's store makes reopening cost 0 ms — so
+  it bounds the first run on a given file, not every run. Moving it would be
+  separate work.
+- **The GPU sim still uploads each level to device memory.** `--out-of-core`
+  makes a level cheap to *hold*, not cheap to *simulate on the GPU*, because
+  `LevelSim` copies offsets/targets/weights into wgpu buffers. At the extreme
+  tier it pairs with `--cpu-layout`, which reads the mapping in place. This is
+  the same GPU-capacity observation D15 opened with, arriving from the other
+  direction.
+
+**Revisit if:** a real dataset makes the extra emit passes hurt more than the
+capacity is worth (the fix is a larger band, or emitting into a per-band buffer);
+node-sized arrays become the ceiling in turn (then they need the same treatment,
+and `labels`/`vote_*` are randomly accessed so it would be a genuinely harder
+problem); or the browser tier needs the same thing, which OPFS cannot serve the
+same way because it has no mmap.
+
+## D17 — Sample graphs are generated in the tab, and are the fixture graphs
 
 Testing the app on a phone (or any device that has never run `npm run fixtures`)
 ran into the obvious wall: there is no CSV on it, and there is no way to put one

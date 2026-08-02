@@ -13,7 +13,7 @@
 //! Run: cargo run --release --example layout_tune [attraction] [repulsion]
 
 use skein_core::{
-    seed_disc_positions, symmetrize, Csr, LevelGraph, LevelSchedule, LevelSim, SimParams,
+    seed_disc_positions, symmetrize, Csr, CsrBuf, LevelGraph, LevelSchedule, LevelSim, SimParams,
 };
 use std::time::Instant;
 
@@ -39,7 +39,7 @@ impl Rng {
 
 /// Planted partition: nodes split into equal communities; each edge is
 /// intra-community with probability `p_intra`, else uniform across the graph.
-fn clustered(nodes: usize, edges: usize, communities: usize, p_intra: f64) -> Csr {
+fn clustered(nodes: usize, edges: usize, communities: usize, p_intra: f64) -> CsrBuf {
     let mut rng = Rng(0x5eed);
     let size = nodes / communities;
     let mut src = Vec::with_capacity(edges);
@@ -64,7 +64,7 @@ fn clustered(nodes: usize, edges: usize, communities: usize, p_intra: f64) -> Cs
 }
 
 /// A regular-ish graph of `n` nodes with ~6 edges each — for timing only.
-fn uniform(n: usize, per_node: usize) -> Csr {
+fn uniform(n: usize, per_node: usize) -> CsrBuf {
     let mut rng = Rng(0xc0ffee);
     let mut src = Vec::with_capacity(n * per_node);
     let mut dst = Vec::with_capacity(n * per_node);
@@ -77,12 +77,8 @@ fn uniform(n: usize, per_node: usize) -> Csr {
     symmetrize(&Csr::from_edges(n as u32, &src, &dst, None))
 }
 
-fn as_level(csr: &Csr) -> LevelGraph<'_> {
-    LevelGraph::new(
-        &csr.offsets,
-        &csr.targets,
-        csr.weights.as_deref().unwrap_or(&[]),
-    )
+fn as_level(csr: &CsrBuf) -> LevelGraph<'_> {
+    LevelGraph::new(&csr.offsets, csr.targets(), csr.weights())
 }
 
 struct Metrics {
@@ -148,7 +144,7 @@ fn main() {
     println!(
         "clustered: {NODES} nodes, {EDGES} edges, {COMMUNITIES} communities \
          ({} symmetrized arcs)",
-        csr.targets.len()
+        csr.edge_count()
     );
     for (a, r) in variants {
         let params = SimParams {

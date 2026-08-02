@@ -11,12 +11,13 @@ mod explore;
 mod ingest;
 mod interner;
 mod layout;
+mod scratch;
 
 pub use coarsen::{
-    build_hierarchy, build_hierarchy_view, coarsen_once, symmetrize, symmetrize_view,
-    HierarchyLevel,
+    build_hierarchy, build_hierarchy_in, build_hierarchy_view, coarsen_once, coarsen_once_in,
+    symmetrize, symmetrize_in, symmetrize_view, HierarchyLevel,
 };
-pub use csr::{Csr, CsrView};
+pub use csr::{Csr, CsrBuf, CsrView};
 pub use csv::CsvScanner;
 pub use explore::{neighbors, total_degrees};
 pub use ingest::{EdgeIngest, IngestConfig, IngestOutput};
@@ -25,3 +26,7 @@ pub use layout::{
     prolongate_positions, seed_disc_positions, LayoutProgress, LevelGraph, LevelSchedule, LevelSim,
     Mulberry32, MultilevelLayout, SimParams, COARSEST_ITERS, GRID, GRID2, MIN_ITERS, WORLD_SIZE,
 };
+pub use scratch::{HeapScratch, Scratch, Slab};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use scratch::MmapScratch;

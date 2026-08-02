@@ -11,7 +11,7 @@
 //
 // `web/src/workers/generate.ts` is a copy of the RNG and both graph generators
 // below, so the app can make the same graphs on a device that has no files on
-// it (DECISIONS.md D16). Change anything here that affects the *output* — the
+// it (DECISIONS.md D17). Change anything here that affects the *output* — the
 // RNG, the attachment rule, the id spelling, the row order — and change it
 // there too; `tests/generate.spec.ts` fails when they disagree.
 
