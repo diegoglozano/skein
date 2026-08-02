@@ -150,6 +150,8 @@ that determinism is end-to-end tested across fresh browser contexts
 crates/skein-core/   Rust: ID interning, CSV scanner, CSR, coarsening — tested natively
 crates/skein-wasm/   wasm-bindgen boundary (thin; algorithms stay in core)
 crates/skein-cli/    the `skein` binary: embeds web/dist and serves it
+crates/skein-native/ macOS-only second front end: winit + wgpu, no browser (D15),
+                     and the out-of-core tier for graphs past the wasm cap (D16)
 web/src/workers/     ingest worker: File.stream() → WASM → CSR + OPFS
 web/src/render/      WebGPU renderer with a WebGL2 fallback, shared flat buffers
 web/src/layout/      multilevel force sim: WGSL compute, plus a CPU reference
