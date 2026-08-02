@@ -1,5 +1,22 @@
 import { expect, type Page } from '@playwright/test';
 
+// Capture the canvas pixels for the "did this reach the framebuffer?" checks.
+//
+// Deliberately `page.screenshot({clip})` and not `canvas.screenshot()`: the
+// element capture first waits for the element to be *stable*, which it decides
+// by comparing bounding boxes across animation frames. Our canvas is driven by
+// a permanent rAF loop, so that check pays several frames of a fill-bound
+// renderer every time — measured at 6.4 s per call against 2.5 s for the clip,
+// on an idle container under SwiftShader. Same pixels, same guarantee: the clip
+// is the canvas's own bounding box, so nothing outside the canvas is captured
+// and a legend appearing next to it still cannot make the comparison pass.
+export async function canvasPixels(page: Page): Promise<Buffer> {
+  const box = (await page.locator('canvas[aria-label="graph canvas"]').boundingBox())!;
+  return page.screenshot({
+    clip: { x: box.x, y: box.y, width: box.width, height: box.height },
+  });
+}
+
 // Build a File from a same-origin fixture and drop it on the dropzone.
 // lastModified is pinned so the OPFS graph id is deterministic across runs.
 export async function dropFixture(page: Page, fixture: string): Promise<void> {
