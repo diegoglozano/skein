@@ -2,7 +2,7 @@
 
 Orientation for a fresh session. Read REQUIREMENTS.md top to bottom before
 writing code — it is the brief. docs/DECISIONS.md records resolved design
-questions (D1–D12); don't relitigate them without new evidence.
+questions (D1–D18); don't relitigate them without new evidence.
 
 ## Roadmap and current status
 
@@ -313,6 +313,22 @@ its numbers for performance decisions (D3/D5).
   interning quadratic once already (see commit history).
 - CI's bench ratio gate is warn-only until a baseline generated on the CI
   runner class is committed.
+- **The Playwright suite *is* the CI run** (D18): 8m33s of a 9m36s wall, so no
+  build-side tuning shows up until it moves. `attributes.spec.ts` and
+  `explore.spec.ts` share one laid-out `tiny` per describe block through a
+  `beforeAll` page, serially — adding a test that mutates OPFS or the graph
+  destructively means giving it its own page (as the DuckDB-lazy and both
+  WebGL2 tests have) or sorting it last, not warming it. Capture pixels with
+  `canvasPixels()` from `helpers.ts`, never `canvas.screenshot()`: the element
+  path waits for a *stable* bounding box against a permanent rAF loop and costs
+  2.6x for identical pixels.
+- Two intuitive test speedups are measured dead ends (D18): a smaller viewport
+  (styled frames are vertex-bound at `tiny`, not fill-bound — 1280x720 and
+  640x480 cost the same) and more Playwright workers (2 already runs the 4-core
+  runner at load ~9). Cut work, not pixels or scheduling.
+- Styling triples every frame under SwiftShader — a styled canvas capture is
+  14.9s against 4.2s unstyled — because D14's styled WebGL2 pass draws
+  instanced endpoint pairs. Expect any new colour/filter test to cost that.
 - **Nothing in CI touches the release path.** No job runs `dist plan` and none
   builds the `skein` binary with `web/dist` embedded, so a release-only breakage
   stays invisible until the tag is pushed — which is how v0.1.0 shipped without

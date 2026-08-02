@@ -12,11 +12,17 @@
 import { test, expect, type Page } from '@playwright/test';
 import { canvasPixels, ingestAndLayout } from './helpers';
 
-/** Wait for a few more drawn frames, so a screenshot sees the current state. */
+// Wait for drawn frames, so a screenshot sees the current state. Two, not the
+// five this used to wait: every caller first waits on the DOM for the state it
+// just asked for (a legend, a filter count), so the style is already applied
+// and one full frame would do — the second is margin. It matters because a
+// *styled* frame is ~3.4x an unstyled one under SwiftShader (the WebGL2 styled
+// edge pass draws instanced endpoint pairs, per D14), so five of them measured
+// 6.4 s against 3.2 s for two.
 async function settle(page: Page): Promise<void> {
   const from = await page.evaluate(() => (window as any).__skeinRender.frames as number);
-  await page.waitForFunction((n) => ((window as any).__skeinRender?.frames ?? 0) > n + 5, from, {
-    timeout: 15_000,
+  await page.waitForFunction((n) => ((window as any).__skeinRender?.frames ?? 0) > n + 2, from, {
+    timeout: 30_000,
   });
 }
 
