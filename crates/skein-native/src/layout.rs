@@ -1,4 +1,4 @@
-//! Native multilevel layout, run off the render thread (D13/N1).
+//! Native multilevel layout, run off the render thread (D15/N1).
 //!
 //! The algorithm is entirely `skein_core::layout` — the same code the browser's
 //! no-WebGPU tier runs through WASM (D11). Nothing is reimplemented here; this
@@ -159,7 +159,7 @@ pub fn spawn(
 
             let t0 = Instant::now();
             // Coarsens directly out of the mapping — the finest level is the
-            // only one that reads the input, and it reads it borrowed (D13/N2).
+            // only one that reads the input, and it reads it borrowed (D15/N2).
             let levels = build_hierarchy_view(store.csr(), target_nodes, max_levels);
             let hierarchy_secs = t0.elapsed().as_secs_f64();
             let level_count = levels.len();

@@ -1,4 +1,4 @@
-//! wgpu compute force sim — the native port of web/src/layout/gpu.ts (D13/N1).
+//! wgpu compute force sim — the native port of web/src/layout/gpu.ts (D15/N1).
 //!
 //! The shader is `shader_layout.wgsl`, copied verbatim from the TS engine; the
 //! `const` prelude is generated here from `skein_core`'s constants so the two
@@ -456,7 +456,7 @@ impl GpuMultilevel {
         let shift = (count - 1 - self.li) as u32;
         // Coarsest gets the long sim; budgets halve as levels grow finer.
         // No `max_sim_nodes` cap: unlike D11's WASM tier every level is
-        // simulated (D13 — that is the point of the native build).
+        // simulated (D15 — that is the point of the native build).
         let iters = COARSEST_ITERS
             .checked_shr(shift)
             .unwrap_or(0)

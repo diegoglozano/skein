@@ -1,10 +1,10 @@
-//! On-disk CSR store, memory-mapped on open (D13/N2).
+//! On-disk CSR store, memory-mapped on open (D15/N2).
 //!
 //! The file layout *is* the in-memory layout: a fixed header followed by the
 //! flat `u32`/`f32` arrays back to back. Opening therefore costs an `mmap` and
 //! two slice casts — no parse, no allocation proportional to the graph, and the
 //! OS pages in only what the algorithms actually touch. That is what lets a
-//! file larger than RAM be laid out at all, which is the capacity argument D13
+//! file larger than RAM be laid out at all, which is the capacity argument D15
 //! rests on.
 //!
 //! Byte order is native and the format carries a version: this is a local cache

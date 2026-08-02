@@ -1,4 +1,4 @@
-// Body ported verbatim from web/src/layout/gpu.ts's SHADER constant (D13/N1).
+// Body ported verbatim from web/src/layout/gpu.ts's SHADER constant (D15/N1).
 // The `const` block that precedes this is generated in gpu_layout.rs from
 // skein-core's constants, where the TS original interpolates them from
 // params.ts — so the two cannot drift silently. Everything below should diff

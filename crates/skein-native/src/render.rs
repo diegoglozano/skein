@@ -1,4 +1,4 @@
-//! wgpu render path — the native port of web/src/render/webgpu.ts (D13/N0).
+//! wgpu render path — the native port of web/src/render/webgpu.ts (D15/N0).
 //!
 //! Same strategy as the browser original, deliberately: vertex pulling from
 //! storage buffers, so the graph lives on the GPU in its flat §4.2 layout —
@@ -6,7 +6,7 @@
 //! Nodes are instanced quads; edges are a line-list drawn straight from the
 //! endpoint indices. The WGSL is `shader.wgsl`, a verbatim copy of the TS one.
 //!
-//! What is *not* the same, and is the point of D13: there is no canvas and no
+//! What is *not* the same, and is the point of D15: there is no canvas and no
 //! compositor between this and the display. wgpu presents to a CAMetalLayer
 //! owned by the winit window.
 
@@ -296,7 +296,7 @@ impl Renderer {
     ///
     /// Sharing one device rather than creating a second is what lets the force
     /// sim and the renderer address the same GPU memory — the zero-copy
-    /// layout→render handoff D13 was built around. Both handles are internally
+    /// layout→render handoff D15 was built around. Both handles are internally
     /// reference-counted and `Send`, so the clone is a refcount bump.
     pub fn gpu_handles(&self) -> (wgpu::Device, wgpu::Queue) {
         (self.device.clone(), self.queue.clone())

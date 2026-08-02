@@ -1,4 +1,4 @@
-// Ported verbatim from web/src/render/webgpu.ts's SHADER constant (D13/N0).
+// Ported verbatim from web/src/render/webgpu.ts's SHADER constant (D15/N0).
 // Kept byte-comparable to the browser original on purpose: wgpu consumes WGSL
 // natively, so any visual divergence between the two front ends is a pipeline
 // setup bug, not a shader bug. Diff this against the TS file before debugging

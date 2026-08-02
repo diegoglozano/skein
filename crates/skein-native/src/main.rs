@@ -1,4 +1,4 @@
-//! skein-native — the macOS front end that has no browser in it (D13).
+//! skein-native — the macOS front end that has no browser in it (D15).
 //!
 //! N0 scope: prove the render path natively and measure it. The window is
 //! winit's, the surface is wgpu's, the graph comes from `skein-core`'s ingest
@@ -31,12 +31,20 @@ use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-/// D8's edge-draw cap, mirroring `EDGE_DRAW_CAP` in GraphView.tsx. Applied by
-/// default here for the same reason the browser applies it — edge drawing is
-/// fill-bound — plus one the browser does not have: the force sim shares this
-/// GPU with the renderer, so an uncapped draw starves the compute queue. With
-/// no cap, a 1M/10M layout took 513 s against 19 s on the CPU engine; the
-/// shader was never the problem.
+/// Fixed edge-draw cap. Applied by default for the reason D8 gives — edge
+/// drawing is fill-bound — plus one the browser does not have: the force sim
+/// shares this GPU with the renderer, so an uncapped draw starves the compute
+/// queue. With no cap, a 1M/10M layout took 513 s against 19 s on the CPU
+/// engine; the shader was never the problem.
+///
+/// **This is behind the web tier.** D13/D13a replaced the fixed cap there with
+/// a budget that follows the camera: `budget / f` scaled by a coverage term,
+/// with `maxEdges` 300k at this tier. So 300k matches the web's *ceiling* and
+/// the fit view draws exactly what the browser draws — but the web also scales
+/// *down* when zoomed out past fit, which D13a measured as a collapse from 57
+/// to 7.8 fps with drawn counts unchanged. This renderer has no such term and
+/// will hit that trough. Porting `web/src/render/lod.ts` is the fix; it needs
+/// the pick grid's cell prefix sums, which this crate does not have yet.
 const BROWSER_EDGE_CAP: u32 = 300_000;
 /// Edge counts the sweep steps through, in the D8 idiom.
 const SWEEP_STEPS: &[u32] = &[300_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000];
@@ -57,7 +65,7 @@ struct GraphData {
     /// Every edge in the file — what the HUD reports.
     edge_count: u32,
     /// How many are actually resident and drawable. At the 100M tier the two
-    /// differ by three orders of magnitude, which is the point (D8/D13).
+    /// differ by three orders of magnitude, which is the point (D8/D15).
     drawn_edges: u32,
     /// The memory-mapped adjacency. Shared with the layout thread, which
     /// coarsens straight out of the mapping rather than a heap copy.

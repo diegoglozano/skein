@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Native macOS front end for skein: winit + wgpu, no browser (DECISIONS.md D13)"
+description = "Native macOS front end for skein: winit + wgpu, no browser (DECISIONS.md D15)"
 
 [dependencies]
 anyhow = "1.0.104"

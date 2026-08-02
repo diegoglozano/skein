@@ -1,6 +1,6 @@
 # skein-native
 
-The macOS front end with no browser in it (docs/DECISIONS.md D13). A winit
+The macOS front end with no browser in it (docs/DECISIONS.md D15). A winit
 window, a wgpu surface on Metal, and `skein-core` — no webview, no WASM, no
 JavaScript.
 
@@ -38,6 +38,14 @@ fill-rate one: without it a 1M/10M layout took 513 s instead of 6.6 s, because
 an uncapped 10M-edge draw starved the compute queue. The shader was never the
 problem.
 
+**The draw budget is behind the web tier.** D13/D13a replaced the fixed cap in
+the browser with one that follows the camera, and measured a collapse from 57
+to 7.8 fps when zooming out past the fit view — drawn counts unchanged, fill
+doing all the damage. 300k here matches the web's `maxEdges` ceiling, so the fit
+view draws exactly what the browser draws, but nothing scales it down past fit
+and this renderer will hit that trough. Porting `web/src/render/lod.ts` is the
+fix; it wants the pick grid's cell prefix sums, which this crate does not have.
+
 ## Store
 
 `store.rs` persists the CSR in its exact in-memory layout beside the source as
@@ -53,7 +61,7 @@ graph costs 2.4 MB and ~90 ms rather than 800 MB and 1.5 s.
 ## No UI
 
 Deliberately. The full egui port of `GraphView.tsx` was dropped when N0 measured
-the render path as no faster than the browser's (D13): the case for going native
+the render path as no faster than the browser's (D15): the case for going native
 is capacity and layout speed, neither of which is improved by drawing the
 sidebar in egui rather than HTML. What exists is pan, zoom, a title-bar HUD, and
 CLI flags. Treat missing UI as a decision, not an omission.
@@ -89,6 +97,6 @@ reports frame times that describe queue occupancy.
 layout and flags `** COLLAPSED **` / `** NON-FINITE **`, because a wrong compute
 shader is characteristically *fast* and wrong.
 
-Reference numbers (M3 Air, headed, docs/DECISIONS.md D13): `medium` 1M/10M lays
+Reference numbers (M3 Air, headed, docs/DECISIONS.md D15): `medium` 1M/10M lays
 out in 5.8 s against the browser's ~11 s; `huge` 10M/100M ingests in 29 s and
 lays out in 89 s, or opens in 0.95 s from a warm store.

@@ -17,7 +17,7 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      # skein-native is macOS-only by construction (docs/DECISIONS.md D13): it
+      # skein-native is macOS-only by construction (docs/DECISIONS.md D15): it
       # owns an NSWindow via winit and presents to a CAMetalLayer via wgpu.
       # Excluded here and covered by the `native` job below, so a Linux runner
       # is not asked to build a desktop GPU app.
@@ -28,7 +28,7 @@ jobs:
       # baseline has been regenerated on this runner class with --update.
       - run: cargo run --release --example bench | node bench/compare-bench.mjs --warn-only
 
-  # The macOS-only native front end (D13). Its unit tests — camera maths, the
+  # The macOS-only native front end (D15). Its unit tests — camera maths, the
   # mmap store round-trip, the edge sampler — are pure logic and need no GPU;
   # anything that does need one is measured by hand on the reference laptop,
   # because headless GPU numbers are not evidence (D3/D5).
@@ -66,7 +66,7 @@ jobs:
       # to two levels, so prolongation is exercised (tiny does not). `small` is
       # needed by the draw-budget gate: it is the smallest preset with more
       # edges than the budget, so it is the smallest one where sampling is
-      # observable at all (D13).
+      # observable at all (D15).
       - run: node bench/generate-fixtures.mjs tiny clustered small
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
