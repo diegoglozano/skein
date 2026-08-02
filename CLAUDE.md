@@ -177,16 +177,24 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   could not have found any of this — it never reset to the fit view and its
   3.3× notches straddled the trough — so `tests/manual-render.mjs` now resets,
   sweeps both ways at 1.49× notches, and reports `sweepMinFps`.
-- **Sample generation in the app (D17, 2026-08-02).** The drop zone can make its
-  own data, for a device with no CSV on it — a phone, or a laptop that never ran
-  `npm run fixtures`. `web/src/workers/generate.ts` synthesizes the edge list and
+- **Sample generation in the app (D17, 2026-08-02; sized by the user in D17a).**
+  The drop zone can make its own data, for a device with no CSV on it — a phone,
+  or a laptop that never ran `npm run fixtures`.
+  `web/src/workers/generate.ts` synthesizes the edge list and
   streams it as CSV bytes through the *ordinary* ingest path (`ingestSource` in
-  `workers/ingest.ts` now takes either a `File` stream or generated chunks), so
+  `workers/ingest.ts` takes either a `File` stream or generated chunks), so
   the generating device exercises parser, interner, CSR and OPFS for real.
-  Presets are the fixture presets and reproduce them exactly — same RNG, same
-  algorithm, same row order — which is why `tests/generate.spec.ts` compares the
-  layout position hash of app-generated `tiny` against dropped `tiny.csv`: that
+  The UI is two number fields (nodes, edges) and one button, not the four
+  presets it shipped with (D17a): bounds live in `sampleSpecError`, which the
+  button disables on *and* `generateEdges` throws on, since the worker cannot
+  trust a two-number message; `edges >= nodes` is enforced because ids exist
+  only where an edge mentions them. Generation reproduces
+  `bench/generate-fixtures.mjs` exactly — same RNG, same algorithm, same row
+  order — which is why `tests/generate.spec.ts` compares the layout position
+  hash of an app-generated 10,000/50,000 graph against dropped `tiny.csv`: that
   test is the only thing keeping the two copies of the generator in step. The
+  app's copy of the *clustered* generator is gone with the presets (D17a), so a
+  phone can no longer make a visibly clustered graph. The
   §7 gate drives generation too (D17: a "download a sample dataset" button is
   the one fetch this app must never make).
 - **M5:** not started; see §11 — distribution (D10) is already done.

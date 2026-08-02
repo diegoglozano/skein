@@ -26,7 +26,7 @@ import {
   generateEdges,
   sampleGraphId,
   sampleGraphName,
-  samplePreset,
+  type SampleSpec,
 } from './generate';
 import {
   graphId,
@@ -256,9 +256,8 @@ async function ingestSource(source: IngestSource, options: IngestOptions) {
  * unaffected, and the only cost of blocking is that `cancel-layout` and
  * friends wait, which nothing is doing while the drop zone is busy.
  */
-async function generateSample(presetKey: string) {
+async function generateSample(spec: SampleSpec) {
   await ready;
-  const preset = samplePreset(presetKey);
 
   // No byte counts yet — the CSV does not exist until the arrays do — so the
   // bar stays indeterminate here and `edges` is what moves.
@@ -268,20 +267,20 @@ async function generateSample(presetKey: string) {
       stage: 'generate',
       bytesRead: 0,
       totalBytes: 0,
-      nodes: preset.nodes,
+      nodes: spec.nodes,
       edges,
     });
   progress(0);
-  const edges = generateEdges(preset, progress);
+  const edges = generateEdges(spec, progress);
   const sizeBytes = csvByteLength(edges);
 
   await ingestSource(
     {
-      id: sampleGraphId(preset),
-      name: sampleGraphName(preset),
+      id: sampleGraphId(spec),
+      name: sampleGraphName(spec),
       sizeBytes,
       totalBytes: sizeBytes,
-      expectedNodes: preset.nodes,
+      expectedNodes: spec.nodes,
       chunks: csvChunks(edges),
     },
     DEFAULT_INGEST_OPTIONS,
@@ -349,10 +348,10 @@ onmessage = async (event: MessageEvent<ToWorker>) => {
         await ingest(msg.file, msg.options);
         break;
       case 'generate':
-        // Regenerating a preset rewrites its csr.bin under the same id — same
-        // reason `ingest` drops the cache.
+        // Regenerating the same size rewrites its csr.bin under the same id —
+        // same reason `ingest` drops the cache.
         csrCache = null;
-        await generateSample(msg.preset);
+        await generateSample(msg.spec);
         break;
       case 'list':
         post({ type: 'graphs', graphs: await listGraphs() });

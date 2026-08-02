@@ -1259,37 +1259,76 @@ there that does not involve a download. §7 forbids the download, and it forbids
 it for exactly the right reason — "fetch a demo dataset" is indistinguishable at
 the network layer from "upload the user's graph".
 
-**Decision:** the drop zone offers a few named sizes, and generating one
-synthesizes the edge list in the tab and feeds it through the ordinary §4 ingest
-path — CSV bytes into the WASM parser, interner, CSR, OPFS, manifest. Not a
-shortcut that builds a CSR directly: the device doing the generating is the
-device whose ingest path we came to test, and a synthetic-only path would be the
-one path a phone never exercises.
+**Decision:** the drop zone asks how big, and generating synthesizes the edge
+list in the tab and feeds it through the ordinary §4 ingest path — CSV bytes
+into the WASM parser, interner, CSR, OPFS, manifest. Not a shortcut that builds
+a CSR directly: the device doing the generating is the device whose ingest path
+we came to test, and a synthetic-only path would be the one path a phone never
+exercises.
 
 Two consequences worth stating.
 
-*The presets are the fixtures.* `web/src/workers/generate.ts` reproduces
-`bench/generate-fixtures.mjs` — same xorshift64\* stream, same preferential
-attachment, same planted partition, same `n<i>` ids, same row order — so
-generating `tiny` in the app yields the same graph as `bench/fixtures/tiny.csv`,
-edge for edge. That makes every number, screenshot and bug report about a preset
-comparable no matter which side produced the data. It is a *copy*, so
-`tests/generate.spec.ts` ingests both and compares the layout position hash
-(D2): identical graphs, identical picture, and divergence is a red test rather
-than a slow surprise. The alternative — importing the Node script into the web
-build — costs a Vite `fs.allow` exception and an untyped `.mjs` import for forty
-lines of arithmetic.
+*The generator is the fixture script's.* `web/src/workers/generate.ts`
+reproduces `bench/generate-fixtures.mjs` — same xorshift64\* stream, same
+preferential attachment, same `n<i>` ids, same row order — so asking for a
+fixture's numbers yields that fixture's graph, edge for edge. That makes every
+number, screenshot and bug report comparable no matter which side produced the
+data. It is a *copy*, so `tests/generate.spec.ts` generates 10,000/50,000,
+ingests `tiny.csv`, and compares the layout position hash (D2): identical
+graphs, identical picture, and divergence is a red test rather than a slow
+surprise. The alternative — importing the Node script into the web build —
+costs a Vite `fs.allow` exception and an untyped `.mjs` import for forty lines
+of arithmetic.
 
 *BigInt stays in the RNG.* It is the bulk of generation (~1 µs an edge), and a
 hand-rolled 32-bit-lane u64 would be a second thing to keep bit-identical with
-the fixture script, for a constant factor that only shows up at `medium` — a
-size no phone can render anyway. `tiny`, `clustered` and `small` are sub-second
-work on a laptop.
+the fixture script, for a constant factor that only shows up in the millions —
+a size no phone can render anyway. Anything up to `small` (100k/500k) is
+sub-second work on a laptop.
 
 Generation is now part of the §7 gate (`no-network.spec.ts`), which is the point:
 the feature most likely to grow a fetch is the one that hands you data.
 
-**Revisit if:** a preset needs to be big enough that BigInt generation becomes
-the wait (then port the RNG and gate it with the same hash test), or the app
-grows a real-dataset importer, at which point "no data on this device" stops
-being the problem this solves.
+### D17a — the size is the user's, not a preset (2026-08-02)
+
+The first cut shipped four buttons (`tiny`, `clustered`, `small`, `medium`),
+which answered "give me some data" but not "give me a graph the size of the one
+I am about to load" — and the latter is what the sizes were being used for, by
+hand, in every performance conversation. The buttons are now two number fields
+and one *generate graph*.
+
+Three things fall out of that.
+
+*Bounds are part of the feature.* An empty field or a typo used to be
+impossible; now it allocates. `sampleSpecError` is the single source of truth
+and both ends call it — the button is disabled on it, and `generateEdges`
+throws on it, because the worker is a message endpoint and a message carrying
+two numbers cannot trust the UI that usually sends it. The ceilings (5M nodes,
+20M edges) are the sizes this path has been run at, not round numbers:
+`medium` was 1M/10M and generation costs 8 bytes an edge plus the CSV it
+streams.
+
+*Edges ≥ nodes is a rule, not a suggestion.* Node ids exist only where an edge
+mentions them, so 10,000 nodes and 500 edges is a 500-node graph and a summary
+that contradicts the request. Refusing it is the honest answer; silently
+clamping either number would be a graph nobody asked for.
+
+*The planted-partition generator left the app.* Two fields cannot express
+`communities`/`pIntra`, and adding a third and fourth would be the preset list
+again in a worse form. `clustered` remains in `bench/generate-fixtures.mjs`,
+which is where the M3 layout-quality gate reads it from; the app's copy was
+deleted rather than left unreachable. The cost is real and worth naming: you
+can no longer produce a visibly clustered graph on a device with no files on
+it, so a phone gets a hairball. Revisit by teaching the fields a shape rather
+than by restoring the buttons.
+
+The graph id is now `sample-<nodes>x<edges>`, so regenerating a size overwrites
+in place (as regenerating a preset did) while two sizes stay two graphs. Names
+are formatted without `toLocaleString` — a persisted name that depends on the
+browser's locale would make the same request two different graphs.
+
+**Revisit if:** a requested size gets big enough that BigInt generation becomes
+the wait (then port the RNG and gate it with the same hash test), the fields
+need to describe a *shape* as well as a size (clustered, bipartite, grid), or
+the app grows a real-dataset importer, at which point "no data on this device"
+stops being the problem this solves.

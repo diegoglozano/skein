@@ -3,69 +3,79 @@
 // never make). The point is a device with no data on it: a phone, or a fresh
 // laptop that has never run `npm run fixtures`.
 //
-// The algorithms here are a deliberate mirror of `bench/generate-fixtures.mjs`
-// — same RNG, same preferential attachment, same planted partition, same id
-// spelling — so a preset generated in the app is the *same graph* as the
-// fixture of that name, edge for edge and row for row. That is not decoration:
-// `tests/generate.spec.ts` ingests both and compares the layout's position
-// hash, which is what stops the two copies drifting apart. Change one, change
-// the other, and let that test judge it.
+// The size is the user's: the drop zone asks for a node count and an edge
+// count, and this synthesizes a scale-free graph of exactly that shape. The
+// algorithm is a deliberate mirror of `bench/generate-fixtures.mjs` — same RNG,
+// same preferential attachment, same `n<i>` id spelling — so asking for a
+// fixture's numbers (10,000 / 50,000) yields the *same graph* as
+// `bench/fixtures/tiny.csv`, edge for edge and row for row. That is not
+// decoration: `tests/generate.spec.ts` ingests both and compares the layout's
+// position hash, which is what stops the two copies drifting apart. Change one,
+// change the other, and let that test judge it.
 //
 // (Why a copy at all: the fixture script is a plain Node script outside the
 // web workspace, and reaching across into it would drag Vite's fs.allow and an
 // untyped .mjs import into the build for forty lines of arithmetic.)
 
-export interface SamplePreset {
-  /** Matches the fixture name, so `small` here is `bench/fixtures/small.csv`. */
-  key: string;
+/** A requested graph size. Nothing else is asked for — the shape is the
+ * fixture script's preferential attachment, which is the one generator whose
+ * output we keep bit-identical across the two copies. */
+export interface SampleSpec {
   nodes: number;
   edges: number;
-  /** Set for a planted-partition graph; absent means preferential attachment. */
-  communities?: number;
-  pIntra?: number;
-  /** What this size is *for* — shown next to the button. */
-  blurb: string;
 }
 
 /** The seed `bench/generate-fixtures.mjs` uses; part of "same graph as the fixture". */
 const FIXTURE_SEED = 0x5eed;
 
-export const SAMPLE_PRESETS: SamplePreset[] = [
-  {
-    key: 'tiny',
-    nodes: 10_000,
-    edges: 50_000,
-    blurb: 'quickest thing that is still a graph',
-  },
-  {
-    key: 'clustered',
-    nodes: 20_000,
-    edges: 120_000,
-    communities: 40,
-    pIntra: 0.92,
-    blurb: 'planted communities — the layout should separate them',
-  },
-  {
-    key: 'small',
-    nodes: 100_000,
-    edges: 500_000,
-    blurb: 'a phone-sized workout',
-  },
-  {
-    key: 'medium',
-    nodes: 1_000_000,
-    edges: 10_000_000,
-    blurb: 'desktop-class — ~150 MB of edges, minutes not seconds',
-  },
-];
+/**
+ * Bounds on what may be typed into the two fields. The ceilings are the sizes
+ * this path has actually been run at: `medium` (1M/10M) was the largest preset
+ * before the fields replaced them, and generation allocates 8 bytes an edge
+ * plus the CSV it streams, so an unbounded field is an out-of-memory tab
+ * rather than a long wait.
+ */
+export const SAMPLE_LIMITS = {
+  minNodes: 2,
+  maxNodes: 5_000_000,
+  minEdges: 1,
+  maxEdges: 20_000_000,
+} as const;
 
-export function samplePreset(key: string): SamplePreset {
-  const preset = SAMPLE_PRESETS.find((p) => p.key === key);
-  if (!preset) throw new Error(`unknown sample preset "${key}"`);
-  return preset;
+/** What the fields start at — the old `tiny` preset, and the fixture the
+ * generator's bit-identity test uses. */
+export const DEFAULT_SAMPLE: SampleSpec = { nodes: 10_000, edges: 50_000 };
+
+/**
+ * Why the requested size cannot be generated, or null if it can. The
+ * edges ≥ nodes rule is not arbitrary: node ids exist only where an edge
+ * mentions them, so a graph with fewer edges than nodes silently comes back
+ * smaller than the number that was typed.
+ */
+export function sampleSpecError(spec: SampleSpec): string | null {
+  const { nodes, edges } = spec;
+  const whole = (n: number) => Number.isInteger(n) && n >= 0;
+  if (!whole(nodes) || !whole(edges)) return 'node and edge counts must be whole numbers';
+  if (nodes < SAMPLE_LIMITS.minNodes || nodes > SAMPLE_LIMITS.maxNodes) {
+    return `node count must be between ${grouped(SAMPLE_LIMITS.minNodes)} and ${grouped(SAMPLE_LIMITS.maxNodes)}`;
+  }
+  if (edges < SAMPLE_LIMITS.minEdges || edges > SAMPLE_LIMITS.maxEdges) {
+    return `edge count must be between ${grouped(SAMPLE_LIMITS.minEdges)} and ${grouped(SAMPLE_LIMITS.maxEdges)}`;
+  }
+  if (edges < nodes) {
+    return 'every node needs at least one edge — ask for at least as many edges as nodes';
+  }
+  return null;
 }
 
-// xorshift64*, seeded — same preset must yield byte-identical output (§6, D2).
+/** Thousands separators without `toLocaleString`: this string ends up in a
+ * graph *name*, which is persisted, and a name that depends on the browser's
+ * locale would make the same request two different graphs. */
+export function grouped(n: number): string {
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// xorshift64*, seeded — the same size must yield byte-identical output (§6, D2).
 // BigInt is the slow part of generation (~1 µs an edge), and it stays: the
 // fixture script's arithmetic *is* this, and a hand-rolled 32-bit-lane u64
 // would be a second thing to keep bit-identical for a constant factor nobody
@@ -139,52 +149,12 @@ function generateScaleFree(
   return { src, dst };
 }
 
-// Planted-partition graph: nodes split into equal communities; each edge is
-// intra-community with probability pIntra, else uniform across the graph.
-function generateClustered(
-  nodes: number,
-  edges: number,
-  communities: number,
-  pIntra: number,
-  seed: number,
-  onProgress?: EdgeProgress,
-): EdgeArrays {
-  const rng = makeRng(seed);
-  const src = new Uint32Array(edges);
-  const dst = new Uint32Array(edges);
-  const size = Math.floor(nodes / communities);
-  let nextReport = PROGRESS_EVERY;
-  for (let e = 0; e < edges; e++) {
-    const c = Math.floor(rng() * communities);
-    const base = c * size;
-    const a = base + Math.floor(rng() * size);
-    let b;
-    if (rng() < pIntra) {
-      b = base + Math.floor(rng() * size);
-    } else {
-      b = Math.floor(rng() * nodes);
-    }
-    src[e] = a;
-    dst[e] = a === b ? base + ((a - base + 1) % size) : b;
-    if (e >= nextReport) {
-      nextReport = e + PROGRESS_EVERY;
-      onProgress?.(e);
-    }
-  }
-  return { src, dst };
-}
-
-export function generateEdges(preset: SamplePreset, onProgress?: EdgeProgress): EdgeArrays {
-  return preset.communities
-    ? generateClustered(
-        preset.nodes,
-        preset.edges,
-        preset.communities,
-        preset.pIntra ?? 0.9,
-        FIXTURE_SEED,
-        onProgress,
-      )
-    : generateScaleFree(preset.nodes, preset.edges, FIXTURE_SEED, onProgress);
+export function generateEdges(spec: SampleSpec, onProgress?: EdgeProgress): EdgeArrays {
+  // The UI blocks these, but the worker is a message endpoint and the message
+  // carries two numbers — a bad pair must fail here rather than allocate.
+  const error = sampleSpecError(spec);
+  if (error) throw new Error(error);
+  return generateScaleFree(spec.nodes, spec.edges, FIXTURE_SEED, onProgress);
 }
 
 const HEADER = 'source,target';
@@ -236,11 +206,12 @@ export function* csvChunks({ src, dst }: EdgeArrays): Generator<Uint8Array> {
   if (lines.length > 0) yield encoder.encode(lines.join('\n') + '\n');
 }
 
-/** Stable per preset, so regenerating overwrites instead of piling up copies. */
-export function sampleGraphId(preset: SamplePreset): string {
-  return `sample-${preset.key}`;
+/** Stable per size, so regenerating the same numbers overwrites instead of
+ * piling up copies — while two different sizes stay two graphs. */
+export function sampleGraphId(spec: SampleSpec): string {
+  return `sample-${spec.nodes}x${spec.edges}`;
 }
 
-export function sampleGraphName(preset: SamplePreset): string {
-  return `${preset.key} (generated)`;
+export function sampleGraphName(spec: SampleSpec): string {
+  return `${grouped(spec.nodes)}×${grouped(spec.edges)} (generated)`;
 }
