@@ -2,7 +2,7 @@
 
 Orientation for a fresh session. Read REQUIREMENTS.md top to bottom before
 writing code — it is the brief. docs/DECISIONS.md records resolved design
-questions (D1–D18); don't relitigate them without new evidence.
+questions (D1–D19); don't relitigate them without new evidence.
 
 ## Roadmap and current status
 
@@ -197,6 +197,22 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   phone can no longer make a visibly clustered graph. The
   §7 gate drives generation too (D17: a "download a sample dataset" button is
   the one fetch this app must never make).
+- **Phones are a supported viewport (D18, 2026-08-02).** The first screenshot
+  from a real phone showed a 17rem sidebar eating 70% of a 390 px screen and a
+  view that could not zoom at all — pan came free with pointer events, zoom was
+  a `wheel` handler and touch never sends one. Below 48rem (`NARROW_QUERY` in
+  `GraphView.tsx`, mirrored by the `@media` block at the end of `app.css`) the
+  canvas takes the whole body and `.explore` becomes a bottom sheet: one 2.6rem
+  handle when closed, raised by a tap that selects a node, overlaying the canvas
+  rather than resizing it. The HUD's readings moved into a `.hud-stats` row that
+  wraps under the title. Pointer handling now tracks a *set* of contacts, so two
+  fingers pinch (midpoint pans, separation zooms); a second finger poisons the
+  tap and lifting one of two re-seats the pan origin. Touch gets a fingertip's
+  slack (pick radius 24 px, click slop 12 px) and no hover picking.
+  `.canvas-controls` adds zoom in/out/fit buttons at every width — *fit* is also
+  the way back from a view panned off into empty space. `tests/mobile.spec.ts`
+  gates it at 390×844 with touch, driving the pinch over CDP because
+  Playwright's touchscreen API is single-contact.
 - **M5:** not started; see §11 — distribution (D10) is already done.
 - **skein-native — a second, macOS-only front end (D15, 2026-08-02).** Parallel
   track; the web app is untouched and stays primary. `crates/skein-native` is a
@@ -313,7 +329,7 @@ its numbers for performance decisions (D3/D5).
   interning quadratic once already (see commit history).
 - CI's bench ratio gate is warn-only until a baseline generated on the CI
   runner class is committed.
-- **The Playwright suite *is* the CI run** (D18): 8m33s of a 9m36s wall, so no
+- **The Playwright suite *is* the CI run** (D19): 8m33s of a 9m36s wall, so no
   build-side tuning shows up until it moves. `attributes.spec.ts` and
   `explore.spec.ts` share one laid-out `tiny` per describe block through a
   `beforeAll` page, serially — adding a test that mutates OPFS or the graph
@@ -322,7 +338,7 @@ its numbers for performance decisions (D3/D5).
   `canvasPixels()` from `helpers.ts`, never `canvas.screenshot()`: the element
   path waits for a *stable* bounding box against a permanent rAF loop and costs
   2.6x for identical pixels.
-- Two intuitive test speedups are measured dead ends (D18): a smaller viewport
+- Two intuitive test speedups are measured dead ends (D19): a smaller viewport
   (styled frames are vertex-bound at `tiny`, not fill-bound — 1280x720 and
   640x480 cost the same) and more Playwright workers (2 already runs the 4-core
   runner at load ~9). Cut work, not pixels or scheduling.

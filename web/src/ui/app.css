@@ -234,6 +234,9 @@ h1 {
   display: flex;
   flex-direction: column;
   background: #0b0b12;
+  /* Height of the sheet handle left poking out when the panel is closed on a
+     phone; the zoom controls sit clear of it. */
+  --sheet-handle: 2.6rem;
 }
 
 .graph-hud {
@@ -251,14 +254,24 @@ h1 {
   color: #e6e6ea;
 }
 
+.hud-stats {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
 .graph-hud button {
-  margin-left: auto;
   border: 1px solid #3a3f55;
   background: transparent;
   color: #9fb6ff;
   border-radius: 6px;
   padding: 0.2rem 0.8rem;
   cursor: pointer;
+  touch-action: manipulation;
+}
+
+.graph-hud .hud-close {
+  margin-left: auto;
 }
 
 .graph-hud .seed-input {
@@ -274,6 +287,18 @@ h1 {
   flex: 1;
   display: flex;
   min-height: 0;
+  /* The bottom sheet is positioned against this box and hangs off it when
+     closed; without the clip it would scroll the page on a phone. */
+  position: relative;
+  overflow: hidden;
+}
+
+.canvas-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
 }
 
 .graph-view canvas {
@@ -282,6 +307,34 @@ h1 {
   min-height: 0;
   touch-action: none;
   cursor: grab;
+}
+
+/* Zoom controls, overlaid on the canvas: a touch screen has no wheel. */
+.canvas-controls {
+  position: absolute;
+  left: 0.75rem;
+  bottom: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.canvas-controls button {
+  width: 2.6rem;
+  height: 2.6rem;
+  border: 1px solid #3a3f55;
+  border-radius: 8px;
+  background: #11131cd9;
+  color: #c7cadb;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.canvas-controls button:hover {
+  color: #e6e6ea;
+  border-color: #4c5270;
 }
 
 /* Explore panel (M4): search, hover card, selection + neighbours. */
@@ -578,4 +631,136 @@ button.link {
   margin: 0;
   overflow-wrap: anywhere;
   text-align: right;
+}
+
+/* ---- Phones. Mirrors NARROW_QUERY in ui/GraphView.tsx — change both.
+   The canvas *is* the app, so it gets the whole body: the 17rem sidebar would
+   otherwise take two thirds of a 390 px screen (and the HUD three rows of its
+   height). The explore panel becomes a bottom sheet that costs one handle
+   when closed, and the HUD's readings drop to a row of their own. */
+@media (max-width: 48rem) {
+  .graph-hud {
+    gap: 0.4rem 0.9rem;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.75rem;
+  }
+
+  .hud-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .graph-hud .hud-close {
+    order: 1;
+    flex: none;
+  }
+
+  /* Own row(s) below the title, wrapping rather than pushing anything off the
+     edge: a reading the user cannot see is worse than one more short line. */
+  .hud-stats {
+    order: 2;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.9rem;
+  }
+
+  .graph-hud .seed-input {
+    width: 3.5rem;
+  }
+
+  /* The sheet itself. Thumb-sized type inside it: it is no longer a mouse
+     target, and it has the width to spend now. */
+  .explore {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 60%;
+    font-size: 0.9rem;
+    border-left: none;
+    border-top: 1px solid #2a2e40;
+    border-radius: 12px 12px 0 0;
+    background: #0d0e16;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    box-shadow: 0 -8px 24px #00000059;
+    transform: translateY(calc(100% - var(--sheet-handle)));
+    transition: transform 0.2s ease;
+  }
+
+  [data-panel='open'] .explore {
+    transform: none;
+  }
+
+  .sheet-handle {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    /* The sheet is a column flexbox: without this the handle is shrunk to
+       nothing the moment its content overflows — a selection with a long
+       neighbour list — and the only way to close the panel goes with it. */
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: var(--sheet-handle);
+    margin: -0.75rem -0.75rem 0;
+    padding: 0 0.75rem;
+    border: none;
+    border-radius: 12px 12px 0 0;
+    background: #0d0e16;
+    color: #9fb6ff;
+    font: inherit;
+    cursor: pointer;
+    touch-action: manipulation;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sheet-handle .grip {
+    width: 2rem;
+    height: 0.25rem;
+    border-radius: 999px;
+    background: #3a3f55;
+    flex: none;
+  }
+
+  /* An open sheet covers the bottom-left corner; pinch still works on the
+     part of the canvas that is left. */
+  [data-panel='open'] .canvas-controls {
+    display: none;
+  }
+
+  .canvas-controls {
+    bottom: calc(var(--sheet-handle) + 0.75rem);
+  }
+
+  .explore input,
+  .attributes select {
+    padding: 0.5rem 0.6rem;
+    font-size: 1rem; /* < 16px makes iOS Safari zoom the page on focus */
+  }
+
+  .explore li button,
+  .attributes > button,
+  .attributes .file-pick.block,
+  .node-card > button,
+  button.link {
+    padding-top: 0.4rem;
+    padding-bottom: 0.4rem;
+  }
+
+  .attributes select {
+    max-width: 55%;
+  }
+
+  .explore .neighbors,
+  .filters .values {
+    max-height: 40vh;
+  }
 }
