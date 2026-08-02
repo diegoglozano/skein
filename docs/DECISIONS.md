@@ -1520,7 +1520,14 @@ for writing it down. Its own comment had already noticed it ("each of these
 costs a full ingest and layout" is why the pinch and button paths share one
 test). They now share a page too, ordered so the zoom test runs last: it ends on
 a deliberate zoom-out below fit, the one piece of camera state the others would
-notice. 156.4s -> 80.4s, 3/3 passing.
+notice. 156.4s -> 80.4s in isolation, 3/3 passing.
+
+The merged suite is therefore 28 tests in 1000.5s of test time / 545.1s wall,
+against the 25-test baseline's 1160.5s / 614.6s. Like for like — the 25 tests
+that existed when this started — it is 882.4s, down 24%. The wall figure gains
+three tests and still drops 11%, which is the number to quote at CI: the `web`
+job's test step should land near 7m35s rather than 8m33s, and the run near
+8m35s rather than 9m36s. Phones cost about a minute of that, and are worth it.
 
 **Revisit if:** the suite grows another DuckDB-dependent spec (share the group
 rather than adding an eighth cold start), someone proposes an fps-driven or
