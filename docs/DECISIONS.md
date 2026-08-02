@@ -1393,3 +1393,144 @@ and a long neighbour list scrolls inside it), the HUD's three narrow rows start
 costing more than they inform, or the fit view needs to account for the sheet
 covering the bottom of the canvas — today it frames the graph in the full
 canvas and the sheet overlays the lower half of it.
+
+## D19 — The test suite is the CI run; setup sharing and capture cost (2026-08-02)
+
+**Question:** CI takes ~9m36s and it is getting in the way. Where does it go,
+and what is worth changing?
+
+**Measured first, on run 30743355359 (main, ubuntu-latest, 4 cores):**
+
+| job | duration |
+| --- | --- |
+| `rust` | 57s |
+| `native` (macOS) | 39s |
+| `web` | **9m33s** |
+
+and inside `web`: checkout + toolchain 16s, `npm ci` 5s, `npm run build` 14s,
+fixtures 1s, Playwright install 20s, **`npm run test -w tests` 8m33s**. The
+Playwright suite is 89% of the whole CI run. Nothing else is worth touching
+until it moves, which is why the two cheap wins below are recorded as cheap.
+
+A local baseline (same core count, SwiftShader, 2 workers) put the suite at
+**1160.5s of test time / 614.6s wall**, distributed like this:
+
+| spec | test time | share |
+| --- | --- | --- |
+| `attributes.spec.ts` | 555.1s | 48% |
+| `explore.spec.ts` | 145.8s | 13% |
+| `lod.spec.ts` | 143.8s | 12% |
+| `no-network.spec.ts` (privacy) | 93.5s | 8% |
+| `no-network.spec.ts` (cli) | 85.8s | 7% |
+| `layout-fallback` / `layout` / `ingest` / `generate` | 136.6s | 12% |
+
+**What the time actually is.** Solo, on an idle container: ingest + layout of
+`tiny` is 4.3s, a DuckDB start is 9.4s, the attribute join 7.3s. Every one of
+`attributes.spec.ts`'s seven tests paid all three, for one graph none of them
+destroys. That is the first cost, and it is pure repetition.
+
+The second is frames, and it is not where it looked. Two measurements killed
+two plausible fixes before they were written:
+
+- *`canvas.screenshot()` costs 6.4s against 2.5s for `page.screenshot({clip})`
+  over the same box.* The element path first waits for the element to be
+  **stable**, which it decides by diffing bounding boxes across animation
+  frames — and this canvas is driven by a permanent rAF loop, so the check pays
+  several frames every time. The clip captures the canvas's own bounding box:
+  same pixels, and a legend appearing beside the canvas still cannot make the
+  comparison pass. Adopted only after checking that two captures of an
+  unchanged canvas are byte-identical and that colour-by still differs.
+- *Frame cost does not scale with canvas pixels.* 6395ms for five styled frames
+  at 1280x720, 6234ms at 640x480. Shrinking the test viewport — the obvious
+  move for a renderer documented as fill-bound (D8) — buys nothing here,
+  because at `tiny` under SwiftShader the styled path is vertex-bound, not
+  fill-bound. Not done.
+
+What the frame numbers *did* show is that **styling triples the cost of
+everything**: an unstyled settle of five frames is 1817ms and a styled one
+6395ms, an unstyled clip capture 4244ms and a styled one 14936ms, and a plain
+`<details>` click 11627ms. That is D14's styled WebGL2 edge pass — instanced
+endpoint *pairs*, because GL2 cannot reach the partner vertex's attribute —
+landing on a software rasteriser. It is the price of the coverage, not a bug.
+
+**Decisions.**
+
+1. *Setup is shared where nothing destroys it.* The five `attributes` tests and
+   three `explore` tests that only want "a laid-out `tiny`" run serially
+   against one page built in `beforeAll`. Serial because they share state: a
+   failure part way through leaves the page in a condition the rest cannot
+   interpret, so skipping the remainder is the honest outcome.
+2. *Three tests keep their own tab, deliberately.* The DuckDB-lazy test is only
+   a test at all against a tab that has never opened the panel, and the two
+   WebGL2 ones choose a backend before any script runs. Warming those would
+   make them pass vacuously.
+3. *Order inside a shared group is load-bearing.* The re-layout test and the
+   close-and-reopen test sort last, because each replaces state the others
+   assert against.
+4. *`settle` waits two frames, not five.* Every caller already waits on the DOM
+   for the state it asked for, so one full frame would do and the second is
+   margin.
+5. *The dead spike leaves the build.* `spike.html` was a production input, so
+   597 kB of cosmos.gl — unimported since D7 — was bundled into every CI run
+   and into the `web/dist` the binary embeds (D10). `SKEIN_SPIKE=1` restores
+   it; the opt-in spike runs against the dev server and never needed it.
+6. *The Playwright browser is cached* on the resolved `@playwright/test`
+   version. Worth 20s, and recorded as 20s.
+
+**Not done, and why.** The `cli` project re-runs the whole of
+`no-network.spec.ts` against the binary, and its heavy first test is 85.8s of
+duplicated app exercise — the app code is byte-identical to the `privacy`
+project's. Only some of it is binary-specific (COOP/COEP, the CSP, and whether
+every brotli-embedded asset including the 35 MB DuckDB wasm actually serves).
+Trimming it to that would be worth ~7% of the suite, but §7 is a stated
+non-negotiable and "extend it whenever the app grows a new code path" is the
+standing instruction, so narrowing it is a call to make deliberately rather
+than as a performance edit.
+
+Worth knowing before making it: **CI has no WebGPU**, so under SwiftShader the
+`WebGL2 fallback` tests and their WebGPU-path counterparts exercise the same
+backend. Those pairs are near-duplicates in CI and only diverge on real
+hardware (D3).
+
+**Result**, same machine and worker count as the baseline above, 25/25 passing:
+
+| | test time | wall |
+| --- | --- | --- |
+| baseline | 1160.5s | 614.6s |
+| shared setup + `settle` at two frames | 963.6s | 533.9s |
+| + CDP capture | **899.4s** | **499.2s** |
+
+—22.5% of test time, —19% of wall. By spec: `attributes.spec.ts` 555.1s ->
+338.1s (—39%), `explore.spec.ts` 145.8s -> 102.8s (—29%), everything untouched
+within ±4%, which is this container's noise. Dropping the spike entry also took
+~700 kB out of `web/dist` (cosmos.gl plus luma.gl's WebGL device) and the vite
+step from 4.50s to 2.65s.
+
+Scaled onto the CI numbers this section opened with, the `web` job's test step
+should go from 8m33s to roughly 6m55s and the run from 9m36s to about 7m50s.
+That is the honest ceiling for this pass: what remains is `lod` (146s, inherent
+— `small` is the smallest fixture where the draw budget is observable at all),
+the two `no-network` runs (173s across both projects), and nine styled captures
+that are irreducibly ~3s each until CI has a GPU.
+
+**Postscript (merge with D18's `mobile.spec.ts`).** D18 landed three phone
+tests while this was in flight, each paying its own ingest and layout — the
+pattern above, arriving the same day it was written down, which is the argument
+for writing it down. Its own comment had already noticed it ("each of these
+costs a full ingest and layout" is why the pinch and button paths share one
+test). They now share a page too, ordered so the zoom test runs last: it ends on
+a deliberate zoom-out below fit, the one piece of camera state the others would
+notice. 156.4s -> 80.4s in isolation, 3/3 passing.
+
+The merged suite is therefore 28 tests in 1000.5s of test time / 545.1s wall,
+against the 25-test baseline's 1160.5s / 614.6s. Like for like — the 25 tests
+that existed when this started — it is 882.4s, down 24%. The wall figure gains
+three tests and still drops 11%, which is the number to quote at CI: the `web`
+job's test step should land near 7m35s rather than 8m33s, and the run near
+8m35s rather than 9m36s. Phones cost about a minute of that, and are worth it.
+
+**Revisit if:** the suite grows another DuckDB-dependent spec (share the group
+rather than adding an eighth cold start), someone proposes an fps-driven or
+viewport-driven speedup (both measured, both buy nothing — see above), or CI
+gains a GPU runner, at which point the styled-frame cost that dominates
+`attributes.spec.ts` disappears and this apportionment is stale.

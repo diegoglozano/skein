@@ -68,6 +68,20 @@ jobs:
       # edges than the budget, so it is the smallest one where sampling is
       # observable at all (D15).
       - run: node bench/generate-fixtures.mjs tiny clustered small
+      # The browser download is ~130 MB and the run never varies for a given
+      # @playwright/test version, so it is cached on the resolved version rather
+      # than re-fetched every push. `--with-deps` installs apt packages outside
+      # ~/.cache/ms-playwright, so it still runs on a hit — but it is the fast
+      # half.
+      - name: Resolve Playwright version
+        id: pw
+        run: |
+          echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
         working-directory: tests
