@@ -177,6 +177,18 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   could not have found any of this — it never reset to the fit view and its
   3.3× notches straddled the trough — so `tests/manual-render.mjs` now resets,
   sweeps both ways at 1.49× notches, and reports `sweepMinFps`.
+- **Sample generation in the app (D16, 2026-08-02).** The drop zone can make its
+  own data, for a device with no CSV on it — a phone, or a laptop that never ran
+  `npm run fixtures`. `web/src/workers/generate.ts` synthesizes the edge list and
+  streams it as CSV bytes through the *ordinary* ingest path (`ingestSource` in
+  `workers/ingest.ts` now takes either a `File` stream or generated chunks), so
+  the generating device exercises parser, interner, CSR and OPFS for real.
+  Presets are the fixture presets and reproduce them exactly — same RNG, same
+  algorithm, same row order — which is why `tests/generate.spec.ts` compares the
+  layout position hash of app-generated `tiny` against dropped `tiny.csv`: that
+  test is the only thing keeping the two copies of the generator in step. The
+  §7 gate drives generation too (D16: a "download a sample dataset" button is
+  the one fetch this app must never make).
 - **M5:** not started; see §11 — distribution (D10) is already done.
 - **skein-native — a second, macOS-only front end (D15, 2026-08-02).** Parallel
   track; the web app is untouched and stays primary. `crates/skein-native` is a

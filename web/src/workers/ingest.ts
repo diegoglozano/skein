@@ -19,6 +19,15 @@ import type {
   LayoutProgress,
   ToWorker,
 } from './protocol';
+import { DEFAULT_INGEST_OPTIONS } from './protocol';
+import {
+  csvByteLength,
+  csvChunks,
+  generateEdges,
+  sampleGraphId,
+  sampleGraphName,
+  samplePreset,
+} from './generate';
 import {
   graphId,
   listGraphs,
@@ -117,13 +126,52 @@ interface FinishResult {
   skippedRows: number;
 }
 
+/**
+ * Where the CSV bytes come from. A dropped file streams from disk; a generated
+ * sample streams straight out of `generate.ts`. Everything downstream of here
+ * — parser, interner, CSR, OPFS, manifest — must not be able to tell which,
+ * which is the whole reason generation produces bytes rather than a CSR.
+ */
+interface IngestSource {
+  id: string;
+  name: string;
+  /** For a generated graph, the size of the CSV that was fed to the parser —
+   * there is no file on the device to ask. */
+  sizeBytes: number;
+  /** Progress-bar denominator; equal to `sizeBytes` for both sources today. */
+  totalBytes: number;
+  /** Capacity hint for the interner only — it grows as needed. */
+  expectedNodes: number;
+  chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
+}
+
+async function* fileChunks(file: File): AsyncGenerator<Uint8Array> {
+  const reader = file.stream().getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    yield value;
+  }
+}
+
 async function ingest(file: File, options: IngestOptions) {
   await ready;
+  await ingestSource(
+    {
+      id: graphId(file),
+      name: file.name,
+      sizeBytes: file.size,
+      totalBytes: file.size,
+      expectedNodes: Math.min(1 << 22, Math.max(1 << 10, Math.floor(file.size / 32))),
+      chunks: fileChunks(file),
+    },
+    options,
+  );
+}
 
-  // Capacity hint only — the interner grows as needed.
-  const expectedNodes = Math.min(1 << 22, Math.max(1 << 10, Math.floor(file.size / 32)));
+async function ingestSource(source: IngestSource, options: IngestOptions) {
   const session = new IngestSession(
-    expectedNodes,
+    source.expectedNodes,
     options.hasHeader,
     options.sourceCol,
     options.targetCol,
@@ -131,17 +179,14 @@ async function ingest(file: File, options: IngestOptions) {
     options.delimiter.charCodeAt(0),
   );
 
-  const totalBytes = file.size;
+  const totalBytes = source.totalBytes;
   let bytesRead = 0;
   let lastProgress = 0;
   const t0 = performance.now();
 
-  const reader = file.stream().getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    session.push_chunk(value);
-    bytesRead += value.byteLength;
+  for await (const chunk of source.chunks) {
+    session.push_chunk(chunk);
+    bytesRead += chunk.byteLength;
     const now = performance.now();
     if (now - lastProgress > PROGRESS_INTERVAL_MS) {
       lastProgress = now;
@@ -178,7 +223,7 @@ async function ingest(file: File, options: IngestOptions) {
     edges: result.edgeCount,
   });
   const t2 = performance.now();
-  const id = graphId(file);
+  const id = source.id;
   const buffers: GraphBuffers = {
     offsets: result.offsets,
     targets: result.targets,
@@ -191,8 +236,8 @@ async function ingest(file: File, options: IngestOptions) {
 
   const summary: GraphSummary = {
     id,
-    name: file.name,
-    sizeBytes: file.size,
+    name: source.name,
+    sizeBytes: source.sizeBytes,
     importedAt: new Date().toISOString(),
     nodeCount: result.nodeCount,
     edgeCount: result.edgeCount,
@@ -203,6 +248,44 @@ async function ingest(file: File, options: IngestOptions) {
   };
   await writeManifest(id, summary);
   post({ type: 'done', graph: summary });
+}
+
+/**
+ * Synthesize a sample graph and push it through `ingestSource`. Generation is
+ * a blocking loop rather than a chunked one — this is a worker, so the UI is
+ * unaffected, and the only cost of blocking is that `cancel-layout` and
+ * friends wait, which nothing is doing while the drop zone is busy.
+ */
+async function generateSample(presetKey: string) {
+  await ready;
+  const preset = samplePreset(presetKey);
+
+  // No byte counts yet — the CSV does not exist until the arrays do — so the
+  // bar stays indeterminate here and `edges` is what moves.
+  const progress = (edges: number) =>
+    post({
+      type: 'progress',
+      stage: 'generate',
+      bytesRead: 0,
+      totalBytes: 0,
+      nodes: preset.nodes,
+      edges,
+    });
+  progress(0);
+  const edges = generateEdges(preset, progress);
+  const sizeBytes = csvByteLength(edges);
+
+  await ingestSource(
+    {
+      id: sampleGraphId(preset),
+      name: sampleGraphName(preset),
+      sizeBytes,
+      totalBytes: sizeBytes,
+      expectedNodes: preset.nodes,
+      chunks: csvChunks(edges),
+    },
+    DEFAULT_INGEST_OPTIONS,
+  );
 }
 
 /** Let the worker's message queue drain, so `cancel-layout` can land. */
@@ -264,6 +347,12 @@ onmessage = async (event: MessageEvent<ToWorker>) => {
         // so a cached CSR would answer later queries from the old graph.
         csrCache = null;
         await ingest(msg.file, msg.options);
+        break;
+      case 'generate':
+        // Regenerating a preset rewrites its csr.bin under the same id — same
+        // reason `ingest` drops the cache.
+        csrCache = null;
+        await generateSample(msg.preset);
         break;
       case 'list':
         post({ type: 'graphs', graphs: await listGraphs() });

@@ -7,9 +7,11 @@ import type {
   ToWorker,
 } from '../workers/protocol';
 import { DEFAULT_INGEST_OPTIONS } from '../workers/protocol';
+import { SAMPLE_PRESETS } from '../workers/generate';
 import { GraphView } from './GraphView';
 
 const STAGE_LABELS: Record<IngestStage, string> = {
+  generate: 'generating edges',
   parse: 'parsing + interning',
   build: 'building CSR',
   persist: 'writing to browser storage',
@@ -112,6 +114,15 @@ export function App() {
     } satisfies ToWorker);
   }, []);
 
+  const generate = useCallback((preset: string) => {
+    setVerifyResult(null);
+    setState({
+      phase: 'working',
+      progress: { stage: 'generate', bytesRead: 0, totalBytes: 0, nodes: 0, edges: 0 },
+    });
+    workerRef.current?.postMessage({ type: 'generate', preset } satisfies ToWorker);
+  }, []);
+
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
@@ -197,11 +208,37 @@ export function App() {
           />
         </label>
 
+        <section className="samples" aria-label="sample graphs">
+          <h2>No data on this device?</h2>
+          <p className="muted">
+            Generate one. It is synthesized here in the tab — the same scale-free and
+            planted-community graphs the project benchmarks against — and then goes
+            through the ordinary import, so nothing is downloaded.
+          </p>
+          <ul>
+            {SAMPLE_PRESETS.map((preset) => (
+              <li key={preset.key}>
+                <button
+                  onClick={() => generate(preset.key)}
+                  disabled={state.phase === 'working'}
+                  data-testid={`generate-${preset.key}`}
+                >
+                  {preset.key} — {preset.nodes.toLocaleString()} nodes,{' '}
+                  {preset.edges.toLocaleString()} edges
+                </button>
+                <span className="muted">{preset.blurb}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+
         {state.phase === 'working' && (
           <div className="progress" role="status">
             <p>
-              {STAGE_LABELS[state.progress.stage]} — {state.progress.nodes.toLocaleString()}{' '}
-              nodes, {state.progress.edges.toLocaleString()} edges
+              {STAGE_LABELS[state.progress.stage]} —{' '}
+              {state.progress.stage === 'generate'
+                ? `${state.progress.edges.toLocaleString()} edges of a ${state.progress.nodes.toLocaleString()}-node graph`
+                : `${state.progress.nodes.toLocaleString()} nodes, ${state.progress.edges.toLocaleString()} edges`}
             </p>
             <progress
               value={state.progress.stage === 'parse' ? state.progress.bytesRead : undefined}
