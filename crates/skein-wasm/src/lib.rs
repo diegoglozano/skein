@@ -64,12 +64,11 @@ pub fn build_layout_hierarchy(
             "offsets",
             &js_sys::Uint32Array::from(&level.graph.offsets[..]),
         );
+        set("targets", &js_sys::Uint32Array::from(level.graph.targets()));
         set(
-            "targets",
-            &js_sys::Uint32Array::from(&level.graph.targets[..]),
+            "weights",
+            &js_sys::Float32Array::from(level.graph.weights()),
         );
-        let weights = level.graph.weights.as_deref().unwrap_or(&[]);
-        set("weights", &js_sys::Float32Array::from(weights));
         if !level.parent_map.is_empty() {
             set(
                 "parentMap",

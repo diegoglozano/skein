@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use skein_core::{build_hierarchy_view, LayoutProgress, MultilevelLayout, SimParams};
+use skein_core::{build_hierarchy_in, LayoutProgress, MultilevelLayout, Scratch, SimParams};
 
 use crate::gpu_layout::GpuMultilevel;
 use crate::store::Store;
@@ -106,6 +106,12 @@ pub enum LayoutMsg {
         /// Present only at the finest level, on preview ticks.
         positions: Option<Vec<f32>>,
     },
+    /// The hierarchy build could not allocate its scratch — out-of-core mode
+    /// with a full or unwritable scratch directory is the realistic cause. A
+    /// silent stall here would look exactly like a slow graph, so it is a
+    /// message rather than a log line (the D15/N1 lesson: wrong is usually fast
+    /// and plausible).
+    Failed { message: String },
     Done {
         positions: Vec<f32>,
         /// Wall time for the whole run, hierarchy included — the number that
@@ -141,12 +147,17 @@ impl Drop for LayoutHandle {
 /// device — which is the *renderer's* device, so positions never leave the
 /// GPU's memory space. Absent, the CPU engine runs, which is the fallback and
 /// also what `--cpu-layout` forces for A/B measurement.
+///
+/// `scratch` decides where the hierarchy's edge-sized arrays live (D16). Each
+/// level owns the slabs it was given, so the scratch is only an allocator; it
+/// moves onto the thread because every level allocates from it.
 pub fn spawn(
     store: Arc<Store>,
     seed: u32,
     target_nodes: u32,
     max_levels: usize,
     gpu: Option<(wgpu::Device, wgpu::Queue)>,
+    scratch: Arc<dyn Scratch>,
 ) -> LayoutHandle {
     let (tx, rx) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -160,7 +171,16 @@ pub fn spawn(
             let t0 = Instant::now();
             // Coarsens directly out of the mapping — the finest level is the
             // only one that reads the input, and it reads it borrowed (D15/N2).
-            let levels = build_hierarchy_view(store.csr(), target_nodes, max_levels);
+            let levels =
+                match build_hierarchy_in(store.csr(), target_nodes, max_levels, scratch.as_ref()) {
+                    Ok(levels) => levels,
+                    Err(e) => {
+                        let _ = tx.send(LayoutMsg::Failed {
+                            message: format!("hierarchy scratch ({}): {e}", scratch.label()),
+                        });
+                        return;
+                    }
+                };
             let hierarchy_secs = t0.elapsed().as_secs_f64();
             let level_count = levels.len();
             // The mapping stays open for the renderer; the pages this touched

@@ -7,6 +7,16 @@ repository.workspace = true
 description = "Core graph data structures for skein: ID interning, CSR, coarsening"
 
 [dependencies]
+# Slabs are allocated as `u32` and read back as `f32` for the weight arrays
+# (src/scratch.rs). bytemuck is compile-time only and keeps this crate free of
+# `unsafe`, which it otherwise is.
+bytemuck = "1.25.2"
+
+# Out-of-core scratch for the hierarchy build (DECISIONS.md D16). Target-gated:
+# wasm has one linear memory and no files (§8), so `MmapScratch` does not exist
+# there and the crate stays dependency-light for the browser build.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+memmap2 = "0.9.11"
 
 [dev-dependencies]
 

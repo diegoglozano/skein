@@ -11,6 +11,7 @@
 //! Usage:
 //!   skein-native <edges.csv> [--seed N] [--edges N]   interactive, vsync
 //!   skein-native <edges.csv> --sweep                  edge-cap sweep, no vsync
+//!   skein-native <edges.csv> --out-of-core            hierarchy scratch on disk
 
 mod camera;
 mod gpu_layout;
@@ -20,12 +21,15 @@ mod store;
 
 use std::fs::File;
 use std::io::{BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 use camera::Camera;
-use skein_core::{seed_disc_positions, EdgeIngest, IngestConfig, Mulberry32, WORLD_SIZE};
+use skein_core::{
+    seed_disc_positions, EdgeIngest, HeapScratch, IngestConfig, MmapScratch, Mulberry32, Scratch,
+    WORLD_SIZE,
+};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -57,6 +61,12 @@ const POINT_SIZE_PX: f32 = 2.0;
 /// layout of the same file are comparable rather than merely similar.
 const HIERARCHY_TARGET_NODES: u32 = 10_000;
 const HIERARCHY_MAX_LEVELS: usize = 12;
+
+/// Default dirty window for out-of-core scratch (`--band-mb`). Small enough to
+/// stay resident on any machine that can run this binary at all, large enough
+/// that the number of extra passes over the input stays in single digits at the
+/// 100M-edge tier.
+const DEFAULT_BAND_MB: usize = 256;
 
 struct GraphData {
     positions: Vec<f32>,
@@ -283,6 +293,9 @@ struct State {
 struct App {
     graph: GraphData,
     seed: u32,
+    /// Where the hierarchy build puts its edge-sized arrays (D16). Shared with
+    /// the layout thread.
+    scratch: Arc<dyn Scratch>,
     edge_limit: Option<u32>,
     sweep: bool,
     serialize: bool,
@@ -373,6 +386,7 @@ impl ApplicationHandler for App {
                     HIERARCHY_TARGET_NODES,
                     HIERARCHY_MAX_LEVELS,
                     gpu,
+                    self.scratch.clone(),
                 )),
                 false => None,
             },
@@ -460,6 +474,11 @@ impl ApplicationHandler for App {
                                 state.status = format!(
                                     "layout L{level}/{levels} {iter}/{iters} ({nodes} nodes)"
                                 );
+                            }
+                            layout::LayoutMsg::Failed { message } => {
+                                eprintln!("layout failed: {message}");
+                                state.status = format!("layout failed: {message}");
+                                finished = true;
                             }
                             layout::LayoutMsg::Done {
                                 positions,
@@ -621,6 +640,9 @@ fn main() -> anyhow::Result<()> {
     let mut cpu_layout = false;
     let mut no_store = false;
     let mut exit_after_layout = false;
+    let mut out_of_core = false;
+    let mut scratch_dir: Option<String> = None;
+    let mut band_mb = DEFAULT_BAND_MB;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -630,6 +652,16 @@ fn main() -> anyhow::Result<()> {
             "--cpu-layout" => cpu_layout = true,
             "--no-store" => no_store = true,
             "--exit-after-layout" => exit_after_layout = true,
+            "--out-of-core" => out_of_core = true,
+            "--scratch-dir" => {
+                i += 1;
+                scratch_dir = Some(args[i].clone());
+                out_of_core = true;
+            }
+            "--band-mb" => {
+                i += 1;
+                band_mb = args[i].parse()?;
+            }
             "--seed" => {
                 i += 1;
                 seed = args[i].parse()?;
@@ -643,7 +675,10 @@ fn main() -> anyhow::Result<()> {
         i += 1;
     }
     let Some(path) = path else {
-        eprintln!("usage: skein-native <edges.csv> [--seed N] [--edges N] [--sweep]");
+        eprintln!(
+            "usage: skein-native <edges.csv> [--seed N] [--edges N] [--sweep] \
+             [--out-of-core] [--scratch-dir DIR] [--band-mb N]"
+        );
         std::process::exit(2);
     };
 
@@ -659,6 +694,27 @@ fn main() -> anyhow::Result<()> {
         edge_limit.unwrap_or(BROWSER_EDGE_CAP) as usize
     };
     let graph = load(&path, seed, !no_store, draw_cap)?;
+
+    // Out-of-core is opt-in, not inferred from free memory: a wrong guess would
+    // silently choose the slower path, and D5's rule is that the tier a run used
+    // should be a stated fact rather than something to reconstruct afterwards.
+    // Scratch defaults to the store's directory, which is where the disk that is
+    // already known to hold this graph lives.
+    let scratch: Arc<dyn Scratch> = if out_of_core {
+        let dir = scratch_dir.map(PathBuf::from).unwrap_or_else(|| {
+            store::store_path(Path::new(&path))
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."))
+        });
+        eprintln!(
+            "hierarchy scratch: mmap in {} ({band_mb} MB bands)",
+            dir.display()
+        );
+        Arc::new(MmapScratch::new(dir, band_mb << 20))
+    } else {
+        Arc::new(HeapScratch)
+    };
     // Default to D8's cap; --edges overrides it in either direction.
     let edge_limit = edge_limit.or(Some(BROWSER_EDGE_CAP));
     let event_loop = EventLoop::new()?;
@@ -666,6 +722,7 @@ fn main() -> anyhow::Result<()> {
     let mut app = App {
         graph,
         seed,
+        scratch,
         edge_limit,
         sweep,
         serialize,

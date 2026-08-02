@@ -53,6 +53,24 @@ fix; it wants the pick grid's cell prefix sums, which this crate does not have.
 two slice casts rather than a parse. `skein-core`'s `CsrView` /
 `build_hierarchy_view` let the hierarchy coarsen straight out of the mapping.
 
+## Out-of-core (`--out-of-core`)
+
+The store solved the *input* side: the ingested CSR is mapped, never copied. The
+hierarchy the layout builds from it was still heap-allocated, and at the 100M
+tier the symmetrized finest level alone is ~1.6 GB that stays live for the whole
+run — measured as the real capacity ceiling in D15/N2. `--out-of-core` puts every
+level's edge arrays in memory-mapped scratch files instead, so those pages are
+reclaimable rather than anonymous (docs/DECISIONS.md D16).
+
+It is opt-in because the trade is real: 15–20% slower at 1M/10M for a 3.5×
+reduction in the RAM the run *requires*. Guessing it from free memory would mean
+silently taking the slower path when the guess is wrong.
+
+**Never point `--scratch-dir` at a tmpfs mount** (`/tmp` on most Linux installs).
+tmpfs pages are backed by swap, not a disk, so the scratch would evict nothing
+while appearing to work. The default is the store's directory, which is the disk
+already holding this graph.
+
 The renderer never expands every edge. `sample_edge_indices` picks the drawn
 sample with a partial Fisher–Yates over a *virtual* identity array — O(k) in
 time and memory regardless of graph size — so a 300k-edge sample of a 100M-edge
@@ -83,6 +101,9 @@ cargo run -p skein-native --release -- <edges.csv> --sweep    # edge-cap fps swe
 | `--sweep` | scripted pan, fps per edge count, vsync off |
 | `--serialize` | block on the GPU each frame — measures render cost, not queue depth |
 | `--exit-after-layout` | clean exit, so `/usr/bin/time -l` attributes peak RSS to one run |
+| `--out-of-core` | hierarchy scratch in memory-mapped files instead of the heap (D16) |
+| `--scratch-dir DIR` | where those files go; implies `--out-of-core`. Defaults beside the store |
+| `--band-mb N` | dirty window for out-of-core scratch (default 256) |
 
 ## Measuring
 

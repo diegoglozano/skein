@@ -202,6 +202,28 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   browser runs**: the pre-rewrite implementation is kept verbatim in the test
   module and three tests assert `f32` **bit** equality against it, because a
   different summation order is a different graph (D2).
+- **Out-of-core hierarchy build (D16, 2026-08-02).** Answers D15/N2's closing
+  "the remaining leverage is making that streaming". Where the build's
+  *edge-sized* arrays live is now a policy: `skein-core::scratch` has
+  `Scratch`/`Slab`, `HeapScratch` (default, and all wasm can use — §8) and
+  `MmapScratch` (file-backed, so pages can be evicted where anonymous ones can
+  only swap). `HierarchyLevel.graph` is a `CsrBuf`, not a `Csr`.
+  `build_dedup_counting` → `build_dedup_banded`: no intermediate array at all
+  (writes each band's triples into the output arrays and compacts each row
+  forward in place), and rows are processed in bands so a mapping's dirty window
+  stays bounded. Viable only because **every edge-sized pass is sequential in CSR
+  row order** while everything random-access is node-sized: resident is O(nodes),
+  streamed is O(edges). Opt-in via `skein-native --out-of-core`
+  [`--scratch-dir DIR`] [`--band-mb N`]; **never point it at tmpfs** (swap-backed,
+  evicts nothing, looks like it worked). Measured on this container at 1M/10M:
+  anonymous memory *required* 700 MB → 600 MB (heap) → **200 MB (mmap)**, layout
+  15–20% slower out-of-core. Peak RSS is the wrong metric and says the tiers are
+  identical — unconstrained, mapped pages just stay resident; see D16.
+  Bit-identity is the constraint: the same reference implementation the D15/N2
+  tests kept is now asserted against **every** storage policy (heap, forced bands
+  of 1/3/17/1024, mmap), and `cargo run --release --example out_of_core` prints
+  per-level checksums that match across pre-D16, heap and mmap at 1M/10M. The
+  browser path is untouched.
 
 M0 facts worth keeping: headless Chromium falls back to SwiftShader even on
 GPU machines — real-hardware runs must be headed; cosmos.gl 3.4 is luma.gl 9
@@ -223,6 +245,9 @@ npm run spike -w tests           # M0 cosmos.gl spike; opt-in, not run by CI
 cargo run -p skein -- --web-root web/dist        # the shippable binary (D10)
 cargo run --release --example bench | node bench/compare-bench.mjs   # ratio gate
 cargo run --release --example layout_tune    # force-param calibration (separation metrics)
+cargo run --release --example out_of_core -- bench/fixtures/medium.csv --scratch mmap
+                                 # D16: hierarchy build per storage tier, one tier
+                                 # per process (peak RSS is a process high-water mark)
 node tests/manual-explore.mjs medium.csv     # M4 pick/search/neighbour timings (headed, preview on :4173)
 node tests/manual-demo.mjs clustered.csv     # re-record the README GIF (headed; ffmpeg)
 

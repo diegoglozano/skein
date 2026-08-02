@@ -1,6 +1,8 @@
 //! Compressed sparse row adjacency, built with a two-pass counting sort
 //! (REQUIREMENTS.md §4.1): degree histogram, prefix sum, fill.
 
+use crate::scratch::Slab;
+
 pub struct Csr {
     /// offsets[i]..offsets[i+1] delimits node i's out-edges in `targets`.
     pub offsets: Vec<u32>,
@@ -34,6 +36,82 @@ impl CsrView<'_> {
     #[inline]
     pub fn edge_count(&self) -> usize {
         self.targets.len()
+    }
+}
+
+/// A weighted CSR whose two edge-sized arrays live wherever a
+/// [`crate::Scratch`] put them — the heap, or a memory-mapped scratch file.
+///
+/// This is what the hierarchy build produces. It is deliberately *not* [`Csr`]:
+/// `Csr`'s arrays are `Vec`s, and at the 100M-edge tier the symmetrized level
+/// alone is ~1.6 GB that must stay live for the entire layout. Which allocator
+/// that comes from is the difference between a graph that fits in RAM and one
+/// that only has to fit on disk (DECISIONS.md D16).
+///
+/// `offsets` stays a plain `Vec`: it is node-sized, it is random-accessed by
+/// every pass, and it is the array that must stay resident for the streamed
+/// ones to be read sequentially.
+pub struct CsrBuf {
+    pub offsets: Vec<u32>,
+    targets: Box<dyn Slab>,
+    /// Always present — everything that builds a `CsrBuf` merges weights.
+    weights: Box<dyn Slab>,
+}
+
+impl CsrBuf {
+    pub fn from_parts(offsets: Vec<u32>, targets: Box<dyn Slab>, weights: Box<dyn Slab>) -> CsrBuf {
+        debug_assert_eq!(targets.u32s().len(), weights.f32s().len());
+        CsrBuf {
+            offsets,
+            targets,
+            weights,
+        }
+    }
+
+    #[inline]
+    pub fn node_count(&self) -> u32 {
+        (self.offsets.len() - 1) as u32
+    }
+
+    #[inline]
+    pub fn edge_count(&self) -> usize {
+        self.targets.u32s().len()
+    }
+
+    #[inline]
+    pub fn targets(&self) -> &[u32] {
+        self.targets.u32s()
+    }
+
+    #[inline]
+    pub fn weights(&self) -> &[f32] {
+        self.weights.f32s()
+    }
+
+    #[inline]
+    pub fn neighbors(&self, node: u32) -> &[u32] {
+        let start = self.offsets[node as usize] as usize;
+        let end = self.offsets[node as usize + 1] as usize;
+        &self.targets()[start..end]
+    }
+
+    #[inline]
+    pub fn as_view(&self) -> CsrView<'_> {
+        CsrView {
+            offsets: &self.offsets,
+            targets: self.targets(),
+            weights: Some(self.weights()),
+        }
+    }
+
+    /// Copy into an owning [`Csr`]. Only for tests and small graphs — this is
+    /// the copy the whole type exists to avoid.
+    pub fn to_csr(&self) -> Csr {
+        Csr {
+            offsets: self.offsets.clone(),
+            targets: self.targets().to_vec(),
+            weights: Some(self.weights().to_vec()),
+        }
     }
 }
 

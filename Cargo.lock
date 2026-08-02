@@ -1601,6 +1601,10 @@ dependencies = [
 [[package]]
 name = "skein-core"
 version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "memmap2",
+]
 
 [[package]]
 name = "skein-native"
