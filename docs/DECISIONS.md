@@ -1332,3 +1332,64 @@ the wait (then port the RNG and gate it with the same hash test), the fields
 need to describe a *shape* as well as a size (clustered, bipartite, grid), or
 the app grows a real-dataset importer, at which point "no data on this device"
 stops being the problem this solves.
+
+## D18 — On a phone the canvas is the app: the panel is a sheet, and touch can zoom
+
+D17 put a graph on a phone for the first time, and the first screenshot back
+from one showed two failures at once. The explore panel is a fixed 17rem
+sidebar, which on a 390 px screen is 70% of the width, so the graph was a
+sliver down the left edge; and the HUD wrapped to three rows on top of that.
+Worse, the view could not be zoomed at all: pan came free with pointer events,
+but zoom was a `wheel` handler and a touch screen never sends one.
+
+**Decision:** below 48rem the canvas takes the whole body and the explore panel
+becomes a bottom sheet, and pointer handling tracks a *set* of contacts so two
+fingers pinch.
+
+*Why a sheet rather than a narrower sidebar, or a tab switch.* Any width the
+sidebar keeps is width the graph loses, permanently, in the layout the user
+spends their time in. A sheet costs one 2.6rem handle when closed and is a
+thumb away when wanted — and, because it overlays rather than displaces, the
+canvas never resizes when it opens, so no camera state changes underneath it
+(a tab switch would unmount the canvas and re-run the render effect, which on
+this code path means re-fitting the view). A tap that selects a node raises the
+sheet by itself: on a phone there is no hover, so the tap is the only way to
+ask, and its whole answer would otherwise be off-screen.
+
+*The breakpoint is duplicated, deliberately.* CSS owns the layout and
+`GraphView` owns whether the handle exists at all (a docked panel must not
+render a button to collapse itself), so `NARROW_QUERY` and the `@media` block
+state the same 48rem. A single source would mean driving the layout from JS
+state — a resize listener re-rendering the view that owns the GPU device.
+
+*Pinch is a pointer-set gesture, not a touch-event handler.* The existing
+handlers already spoke Pointer Events, so pinch is `pointers: Map<id, xy>`:
+size 1 is the old drag, size 2 pans by the midpoint and zooms by the
+separation, both anchored at the midpoint so the world stays under the fingers.
+Two edges are the whole difference between working and infuriating, and both
+are tested: a second finger poisons the tap (`travel = Infinity`) so ending a
+pinch does not select whatever is under the last finger up, and lifting one of
+two fingers re-seats the surviving one as the pan origin — without that the
+camera jumps by the distance between them on the next move. Touch also gets a
+fingertip's slack in both the pick radius (24 px vs 12) and the click threshold
+(12 px vs 4), and hover picking is skipped for non-mouse pointers entirely.
+
+*The zoom buttons are not a fallback for pinch.* Pinch works; the buttons make
+zoom discoverable, give a one-thumb path, and — with *fit* beside them — are
+the only way back from a view the user has panned off into empty space, which
+is easy to do on a small screen and was previously unrecoverable without a
+re-layout. They are shown at every width for the same reason.
+
+`tests/mobile.spec.ts` gates all of it at 390×844 with touch: the canvas gets
+>95% of the width, the sheet parks off the bottom and comes back, a CDP-driven
+pinch moves `__skeinRender.zoom` (Playwright's touchscreen API is
+single-contact and cannot express a pinch at all), and the buttons zoom and
+fit. It also asserts the handle's *height*, which is not paranoia: as a flex
+item in a column it was silently shrunk to zero the moment a selection
+overflowed the sheet, taking the only way to close the panel with it.
+
+**Revisit if:** the sheet wants a half-open detent (it is open/closed today,
+and a long neighbour list scrolls inside it), the HUD's three narrow rows start
+costing more than they inform, or the fit view needs to account for the sheet
+covering the bottom of the canvas — today it frames the graph in the full
+canvas and the sheet overlays the lower half of it.

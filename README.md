@@ -93,6 +93,16 @@ work. The graph is parsed to CSR and persisted to OPFS in your browser, which is
 why it shows up in the recent-graphs list on the next visit — and why clearing
 site data for the origin deletes it.
 
+### On a phone
+
+The layout is the app's, not the browser's: below 48rem the canvas takes the
+whole screen and the explore panel becomes a bottom sheet, closed to a handle
+until you pull it up — and raised for you when you tap a node, since a tap is
+the only way to ask on a device with no hover. Drag to pan, **pinch to zoom**,
+or use the zoom in / out / fit buttons in the corner of the canvas; *fit* is
+also how you get back after panning off into empty space (docs/DECISIONS.md
+D18).
+
 ### Attributes
 
 Attach a second CSV — node ids in one column, anything else alongside — and the

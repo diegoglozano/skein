@@ -197,6 +197,22 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   phone can no longer make a visibly clustered graph. The
   §7 gate drives generation too (D17: a "download a sample dataset" button is
   the one fetch this app must never make).
+- **Phones are a supported viewport (D18, 2026-08-02).** The first screenshot
+  from a real phone showed a 17rem sidebar eating 70% of a 390 px screen and a
+  view that could not zoom at all — pan came free with pointer events, zoom was
+  a `wheel` handler and touch never sends one. Below 48rem (`NARROW_QUERY` in
+  `GraphView.tsx`, mirrored by the `@media` block at the end of `app.css`) the
+  canvas takes the whole body and `.explore` becomes a bottom sheet: one 2.6rem
+  handle when closed, raised by a tap that selects a node, overlaying the canvas
+  rather than resizing it. The HUD's readings moved into a `.hud-stats` row that
+  wraps under the title. Pointer handling now tracks a *set* of contacts, so two
+  fingers pinch (midpoint pans, separation zooms); a second finger poisons the
+  tap and lifting one of two re-seats the pan origin. Touch gets a fingertip's
+  slack (pick radius 24 px, click slop 12 px) and no hover picking.
+  `.canvas-controls` adds zoom in/out/fit buttons at every width — *fit* is also
+  the way back from a view panned off into empty space. `tests/mobile.spec.ts`
+  gates it at 390×844 with touch, driving the pinch over CDP because
+  Playwright's touchscreen API is single-contact.
 - **M5:** not started; see §11 — distribution (D10) is already done.
 - **skein-native — a second, macOS-only front end (D15, 2026-08-02).** Parallel
   track; the web app is untouched and stays primary. `crates/skein-native` is a
