@@ -1,20 +1,46 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type CDPSession, type Page } from '@playwright/test';
 
 // Capture the canvas pixels for the "did this reach the framebuffer?" checks.
+// This is the suite's most repeated expensive operation — thirteen calls, nine
+// of them on a *styled* graph, which under SwiftShader costs ~3.4x an unstyled
+// one (D14's styled WebGL2 pass draws instanced endpoint pairs). Three layers
+// of cost were measured off, in order:
 //
-// Deliberately `page.screenshot({clip})` and not `canvas.screenshot()`: the
-// element capture first waits for the element to be *stable*, which it decides
-// by comparing bounding boxes across animation frames. Our canvas is driven by
-// a permanent rAF loop, so that check pays several frames of a fill-bound
-// renderer every time — measured at 6.4 s per call against 2.5 s for the clip,
-// on an idle container under SwiftShader. Same pixels, same guarantee: the clip
-// is the canvas's own bounding box, so nothing outside the canvas is captured
-// and a legend appearing next to it still cannot make the comparison pass.
+//   canvas.screenshot()      6.4 s   element capture first waits for a *stable*
+//                                    bounding box, which it decides by diffing
+//                                    boxes across animation frames — and this
+//                                    canvas has a permanent rAF loop, so the
+//                                    check pays several frames every time
+//   page.screenshot({clip})  8.7 s   (same run as the two below; the numbers
+//                                    move with load, the ratios do not)
+//   CDP fromSurface: true    4.3 s   Playwright's own wrapper costs 2x the CDP
+//                                    call it makes
+//   CDP fromSurface: false   3.2 s   captures the renderer's output directly
+//                                    instead of round-tripping the browser
+//                                    compositor
+//
+// So: CDP, fromSurface false. Chromium-only, which this suite already is. The
+// clip is the canvas's own bounding box, so nothing outside the canvas is
+// captured and a legend appearing beside it cannot make a comparison pass.
+// Verified before adopting: two captures of an unchanged canvas are
+// byte-identical, and a colour-by still changes them.
+const sessions = new WeakMap<Page, Promise<CDPSession>>();
+
 export async function canvasPixels(page: Page): Promise<Buffer> {
   const box = (await page.locator('canvas[aria-label="graph canvas"]').boundingBox())!;
-  return page.screenshot({
-    clip: { x: box.x, y: box.y, width: box.width, height: box.height },
+  let session = sessions.get(page);
+  if (!session) {
+    session = page.context().newCDPSession(page);
+    sessions.set(page, session);
+  }
+  const { data } = await (
+    await session
+  ).send('Page.captureScreenshot', {
+    format: 'png',
+    fromSurface: false,
+    clip: { x: box.x, y: box.y, width: box.width, height: box.height, scale: 1 },
   });
+  return Buffer.from(data, 'base64');
 }
 
 // Build a File from a same-origin fixture and drop it on the dropzone.
