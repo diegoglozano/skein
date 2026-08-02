@@ -1058,3 +1058,25 @@ determinism, seed sensitivity, full-permutation case, over-request clamping,
 uniform coverage across the range, and `source_of` against a linear scan
 including empty and leading-empty rows) — an off-by-one there would draw a
 wrong but entirely plausible picture.
+
+### D15 vs D13: the native draw budget is a fixed cap, deliberately for now
+
+D15 was designed and measured against a `main` that predated D13/D13a, so its
+renderer applies a fixed 300k edge cap where the web tier now sizes the sample
+from the camera. The two are not in conflict at the fit view — D13a lowered
+`maxEdges` to 300k at this tier and noted the scaling term can only *reduce* the
+count there, so both front ends draw the same thing on the frame D8 tuned for.
+
+They diverge away from it. D13a measured the fit view is *not* the worst frame:
+zooming out past it collapsed 1M/10M from 57 to 7.8 fps with drawn counts
+bit-identical, which is why `lod.ts` grew a coverage term. skein-native has no
+such term and will hit that trough.
+
+**Not fixed here** because the port is not mechanical: `lod.ts` counts the
+visible share off the M4 pick grid's cell prefix sums, and skein-native has no
+pick grid — D15 dropped the interaction surface along with the UI. Adding one
+is worth doing on its own terms (it is also what hover and selection would
+need), not as a rider on this change.
+
+**Revisit when:** skein-native grows a pick grid, or a user reports the zoomed-
+out trough on real data.
