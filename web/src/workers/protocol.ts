@@ -3,6 +3,7 @@
 // path needs them transferred.
 
 import type { LayoutProgress } from '../layout/params';
+import type { SampleSpec } from './generate';
 
 export type { LayoutProgress };
 
@@ -46,9 +47,9 @@ export interface GraphSummary {
 
 export type ToWorker =
   | { type: 'ingest'; file: File; options: IngestOptions }
-  /** Synthesize a sample graph of the named size and ingest it, for a device
-   * that has no data on it (`generate.ts` has the presets). */
-  | { type: 'generate'; preset: string }
+  /** Synthesize a sample graph of the requested size and ingest it, for a
+   * device that has no data on it (`generate.ts` has the bounds). */
+  | { type: 'generate'; spec: SampleSpec }
   | { type: 'list' }
   | { type: 'verify'; id: string }
   | { type: 'load'; id: string }

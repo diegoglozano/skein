@@ -76,15 +76,17 @@ alice,bob
 alice,carol
 ```
 
-**Nothing to feed it?** Under the drop zone are four sizes — `tiny` (10k/50k),
-`clustered` (20k/120k, planted communities), `small` (100k/500k) and `medium`
-(1M/10M, desktop-class) — and picking one *generates* that graph in the tab and
-imports it like any file. Nothing is downloaded; the edges are synthesized on
-your device, which is the only way to hand you a sample without breaking the
-promise in the badge. They are the same graphs `bench/generate-fixtures.mjs`
-writes, edge for edge, so a screenshot or a timing of `small` means the same
-thing whichever side produced it (docs/DECISIONS.md D17). This is how to try
-skein on a phone.
+**Nothing to feed it?** Under the drop zone are two fields — a node count and an
+edge count — and *generate graph* synthesizes a scale-free graph of exactly that
+size in the tab, then imports it like any file. Up to 5M nodes and 20M edges,
+with at least one edge per node (ids exist only where an edge mentions them, so
+a sparser request would quietly come back smaller than you asked for). Nothing
+is downloaded; the edges are synthesized on your device, which is the only way
+to hand you a sample without breaking the promise in the badge. The generator is
+`bench/generate-fixtures.mjs`'s, edge for edge, so asking for a fixture's numbers
+— 10,000 / 50,000 is `tiny.csv` — gives you that fixture exactly, and a
+screenshot or a timing means the same thing whichever side produced the data
+(docs/DECISIONS.md D17). This is how to try skein on a phone.
 
 IDs are arbitrary strings; they're interned, so numeric and textual IDs both
 work. The graph is parsed to CSR and persisted to OPFS in your browser, which is

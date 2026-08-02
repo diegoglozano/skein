@@ -7,7 +7,13 @@ import type {
   ToWorker,
 } from '../workers/protocol';
 import { DEFAULT_INGEST_OPTIONS } from '../workers/protocol';
-import { SAMPLE_PRESETS } from '../workers/generate';
+import {
+  DEFAULT_SAMPLE,
+  SAMPLE_LIMITS,
+  grouped,
+  sampleSpecError,
+  type SampleSpec,
+} from '../workers/generate';
 import { GraphView } from './GraphView';
 
 const STAGE_LABELS: Record<IngestStage, string> = {
@@ -37,6 +43,10 @@ export function App() {
   const [recent, setRecent] = useState<GraphSummary[]>([]);
   const [verifyResult, setVerifyResult] = useState<{ id: string; detail: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // Kept as strings: a half-typed field is a string, and coercing it to a
+  // number on every keystroke turns "" into 0 and fights the user's backspace.
+  const [nodeInput, setNodeInput] = useState(String(DEFAULT_SAMPLE.nodes));
+  const [edgeInput, setEdgeInput] = useState(String(DEFAULT_SAMPLE.edges));
   const [viewing, setViewing] = useState<{ graph: LoadedGraph; summary: GraphSummary } | null>(
     null,
   );
@@ -114,13 +124,13 @@ export function App() {
     } satisfies ToWorker);
   }, []);
 
-  const generate = useCallback((preset: string) => {
+  const generate = useCallback((spec: SampleSpec) => {
     setVerifyResult(null);
     setState({
       phase: 'working',
-      progress: { stage: 'generate', bytesRead: 0, totalBytes: 0, nodes: 0, edges: 0 },
+      progress: { stage: 'generate', bytesRead: 0, totalBytes: 0, nodes: spec.nodes, edges: 0 },
     });
-    workerRef.current?.postMessage({ type: 'generate', preset } satisfies ToWorker);
+    workerRef.current?.postMessage({ type: 'generate', spec } satisfies ToWorker);
   }, []);
 
   const onDrop = useCallback(
@@ -141,6 +151,12 @@ export function App() {
     if (!summariesRef.current.has(summary.id)) summariesRef.current.set(summary.id, summary);
     workerRef.current?.postMessage({ type: 'load', id: summary.id } satisfies ToWorker);
   }, []);
+
+  const requestedSample: SampleSpec = { nodes: Number(nodeInput), edges: Number(edgeInput) };
+  const sampleError =
+    nodeInput.trim() === '' || edgeInput.trim() === ''
+      ? 'enter a node count and an edge count'
+      : sampleSpecError(requestedSample);
 
   if (viewing && workerRef.current) {
     return (
@@ -211,25 +227,62 @@ export function App() {
         <section className="samples" aria-label="sample graphs">
           <h2>No data on this device?</h2>
           <p className="muted">
-            Generate one. It is synthesized here in the tab — the same scale-free and
-            planted-community graphs the project benchmarks against — and then goes
-            through the ordinary import, so nothing is downloaded.
+            Say how big, and one is synthesized here in the tab — a scale-free graph
+            of that size, the same kind the project benchmarks against — then put
+            through the ordinary import. Nothing is downloaded.
           </p>
-          <ul>
-            {SAMPLE_PRESETS.map((preset) => (
-              <li key={preset.key}>
-                <button
-                  onClick={() => generate(preset.key)}
-                  disabled={state.phase === 'working'}
-                  data-testid={`generate-${preset.key}`}
-                >
-                  {preset.key} — {preset.nodes.toLocaleString()} nodes,{' '}
-                  {preset.edges.toLocaleString()} edges
-                </button>
-                <span className="muted">{preset.blurb}</span>
-              </li>
-            ))}
-          </ul>
+          <form
+            className="sample-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!sampleError) generate(requestedSample);
+            }}
+          >
+            <label>
+              nodes
+              <input
+                type="number"
+                inputMode="numeric"
+                min={SAMPLE_LIMITS.minNodes}
+                max={SAMPLE_LIMITS.maxNodes}
+                step={1}
+                value={nodeInput}
+                onChange={(e) => setNodeInput(e.target.value)}
+                data-testid="generate-nodes"
+              />
+            </label>
+            <label>
+              edges
+              <input
+                type="number"
+                inputMode="numeric"
+                min={SAMPLE_LIMITS.minEdges}
+                max={SAMPLE_LIMITS.maxEdges}
+                step={1}
+                value={edgeInput}
+                onChange={(e) => setEdgeInput(e.target.value)}
+                data-testid="generate-edges"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={state.phase === 'working' || sampleError !== null}
+              data-testid="generate-run"
+            >
+              generate graph
+            </button>
+          </form>
+          {sampleError ? (
+            <p className="sample-note error" role="alert" data-testid="generate-error">
+              {sampleError}
+            </p>
+          ) : (
+            <p className="sample-note muted">
+              up to {grouped(SAMPLE_LIMITS.maxNodes)} nodes and{' '}
+              {grouped(SAMPLE_LIMITS.maxEdges)} edges, at least one edge per node. A
+              million nodes is minutes, not seconds.
+            </p>
+          )}
         </section>
 
         {state.phase === 'working' && (

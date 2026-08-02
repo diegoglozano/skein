@@ -35,7 +35,7 @@ test('app makes no off-origin requests', async ({ page, baseURL }) => {
   // Sample generation is the one feature that would be trivially tempting to
   // implement as a download ("fetch a demo dataset"), so it is exercised here:
   // the graph must be synthesized in the tab.
-  await generateSample(page, 'tiny');
+  await generateSample(page, 10_000, 50_000);
   await expect(page.getByTestId('ingest-summary')).toContainText('10,000 nodes', {
     timeout: 60_000,
   });
