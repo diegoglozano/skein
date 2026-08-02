@@ -74,13 +74,23 @@ const isolationHeaders = {
   'Cross-Origin-Embedder-Policy': 'require-corp',
 };
 
+// The M0 spike is opt-in (`npm run spike -w tests`, against the dev server,
+// which serves spike.html straight from the project root and needs no build
+// input). Building it by default bundled 597 kB of cosmos.gl — a dependency
+// nothing in the app imports since D7 — into every CI run and into the binary
+// that embeds web/dist (D10). SKEIN_SPIKE=1 builds it when the question comes
+// back; `npm run spike -w tests` does not need it at all.
+const spikeInput = process.env.SKEIN_SPIKE
+  ? { spike: path.resolve(root, 'spike.html') }
+  : {};
+
 export default defineConfig({
   plugins: [react(), injectCsp(), serveFixtures()],
   build: {
     rollupOptions: {
       input: {
         main: path.resolve(root, 'index.html'),
-        spike: path.resolve(root, 'spike.html'),
+        ...spikeInput,
       },
     },
   },
