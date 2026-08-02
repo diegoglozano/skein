@@ -695,3 +695,388 @@ ones that survive it.
 
 **Revisit if:** node marks grow enough to carry a second channel (shape, or a
 ring), which is what would let identity survive past three hues.
+
+## D15 — A native macOS app (winit + wgpu + egui), and the N0 spike that gates it
+
+The browser build stays the primary artifact. This decision covers a *second*
+front end for macOS that removes the browser entirely, motivated by three wants
+that the browser tier cannot satisfy: multithreaded compute, graphs past the
+WASM 4 GB linear-memory cap (§8), and a target of 100M+ edges.
+
+**Not Tauri.** Tauri is a WKWebView plus a native Rust process. The compute half
+is genuinely native — rayon, no 4 GB cap — but the renderer stays in the webview,
+so positions must cross an IPC boundary on every layout preview tick: 8 MB at 1M
+nodes, 80 MB at 10M, and unworkable at the 100M target. D10 rejected Tauri on
+Linux WebGPU grounds; this rejects it on the layout→render handoff, which is a
+macOS-specific and more fundamental objection. A hybrid (native wgpu surface
+layered under a transparent webview, keeping the React UI) was considered and
+declined: it keeps ~934 lines of working UI at the cost of routing all pointer
+input across two layers, and M4's interaction surface is entirely pointer-driven.
+
+**Chosen: fully native.** winit owns the NSWindow and input, wgpu presents to a
+CAMetalLayer, egui draws the panels through the same surface. No webview, no JS,
+no IPC. The layout compute shader writes a GPU buffer the render vertex shader
+reads — the handoff is a binding, not a copy.
+
+**What this costs and what it reuses.** `skein-core` (~2,100 lines: csv, ingest,
+csr, interner, coarsen, explore, layout) is reused unchanged — its algorithms
+already take `&[u32]` slices, which is exactly what an mmap derefs to. The
+renderer (~435 lines) and the GPU layout (~664) port to wgpu with the WGSL going
+near-verbatim, since wgpu consumes WGSL natively. `GraphView.tsx` and `App.tsx`
+(~934 lines) are rewritten in egui; that is the real cost.
+
+Two pre-existing compromises resolve themselves, which is corroborating evidence
+that this is the grain of the codebase rather than against it. D12's main-thread
+TypeScript exception (`pick.ts`, `search.ts`) existed *only* because the WASM
+instance lived in the worker and main-thread code could not call it; natively
+there is no worker, so both move into `skein-core` with native tests. D11's
+duplicated seeding/prolongation helpers between `multilevel.ts` and `layout.rs`
+collapse to the one Rust copy.
+
+**Out-of-core, calibrated.** At 100M edges the symmetrized CSR with weights is
+~1.6 GB and the whole working set lands near 3–4 GB — that is mmap-and-let-the-
+page-cache-work, not streaming. True streaming starts nearer 1B edges. The
+binding constraint at 100M is the **GPU**, not RAM: 800 MB of endpoint indices
+cannot sit in a GPU buffer and draw at 60 fps, so the density-field rendering
+that D8 deferred "past ~20M edges" becomes mandatory rather than optional.
+
+### Staging
+
+- **N0 — spike.** Port the renderer to wgpu in a winit window, load a fixture,
+  measure. Gates everything below. Criteria are set out below, before the run.
+- **N1 — walking skeleton.** mmap'd CSR store, `skein-core` layout driving the
+  ported renderer, fixture loaded from argv. No UI. Produces the first honest
+  native-vs-browser comparison at 1M/10M.
+- **N2 — out-of-core.** On-disk CSR in the exact in-memory layout, mmap'd;
+  ingest writes it directly. Push to 100M edges.
+- **N3 — render at scale.** LOD and density-field edge rendering (D8's deferred
+  answer). This is where 100M+ actually reaches the screen.
+- **N4 — UI parity in egui.** Drop zone, explore panel, search, HUD, recent
+  graphs; `pick`/`search` move into `skein-core`.
+
+### N0 pass criteria, set before running
+
+Recorded in advance per D5, and stated as a hypothesis that can fail:
+
+1. **Correctness.** The ported WGSL renders the same fixture at the same camera
+   to a visually identical frame. The shaders are shared source in spirit, so a
+   divergence means the wgpu pipeline setup is wrong, not the shader.
+2. **Fill ceiling — calibration, not pass/fail.** Record edges drawn at ≥60 fps
+   at fit view. **The honest expectation is a modest gain, not a large one:** D8
+   established that edge drawing is fragment-fill-bound, and fill rate is a
+   property of the same M3 GPU. Native removes compositing and per-call
+   validation, not fragments per second. A 300k → ~1M improvement would be a good
+   result; a 10× would be a surprise worth explaining before it is believed.
+3. **Frame pacing — the clean test.** D7 and D12 both measured rAF pinned at
+   ~30 fps on a blank page on the reference laptop. Native presents on a display
+   link. If native does not comfortably exceed 30 fps on a scene where the
+   browser sits at that ceiling, the presentation-overhead hypothesis behind this
+   whole decision is wrong.
+4. **Memory.** Process RSS at 1M/10M, against the browser's ~81 MB JS heap (M2).
+
+**Reconsider the render half if:** criterion 3 fails, or criterion 2 lands below
+~2× the current 300k cap *and* 3 shows no headroom — that combination would mean
+native buys little for drawing, and the case would rest on the memory ceiling and
+out-of-core alone. Those remain sufficient reasons on their own, but the scope
+should then shrink to N1–N2 rather than a full UI rewrite.
+
+### N0 results and the resulting scope cut (2026-08-01)
+
+The spike ran on the reference laptop (M3 Air, headed, real Metal adapter),
+`medium` 1M/10M, harness `crates/skein-native` with `--sweep`. Against the
+criteria set above:
+
+**Criterion 1 — correctness: pass.** The ported WGSL renders the fixture; the
+camera port carries four unit tests (fit, cursor-anchored zoom, pan direction,
+zoom clamp).
+
+**Criterion 2 — fill ceiling: no meaningful gain, as predicted.** Pipelined
+(the only mode comparable to D8's rAF-driven browser numbers): 300k edges at
+58.6 fps, 1M at ~12–15, 2M at 6.4. D8's browser figures are 300k at 40–60 and
+2M at ~6. Native sits at the top of the browser's range and is indistinguishable
+by 2M. GPU-serialized, the true per-frame cost is 300k → 29.8 fps, 1M → 10.0.
+Fill rate is a property of the M3, and removing the browser does not create
+fragments per second. This is what the criterion said to expect, and it is why
+the scope below shrinks.
+
+**Getting these numbers took three harness fixes, each of which produced
+confident garbage first** — recorded because the failure mode is the point:
+counting surface-refused frames as drawn (reported 64,867 fps at 10M edges);
+an occluded window silently refusing every frame; and, subtlest, vsync-off
+swapchain queueing letting the CPU run frames ahead, so wall time between
+frames measured queue occupancy rather than rendering ("best 1894 fps, worst
+4.0" on the same step). `Renderer::render` now returns whether it presented,
+`#[must_use]`, and `wait_for_gpu` serializes on request. A wgpu uncaptured-error
+handler is installed for the D12 reason: a rejected draw raises nothing and just
+produces a fast empty frame.
+
+**Criteria 3 and 4 (frame pacing, memory) were not completed** — the 5M and 10M
+sweep steps were lost to window occlusion. They are not gating the decision
+below, because that decision does not rest on render speed.
+
+**Revised scope: N1–N2 only, no UI port.** The project's criteria are (a) ingest
+and lay out *bigger files*, sampling for display being explicitly acceptable,
+and (b) a real speed win somewhere. Measured against those:
+
+- **Capacity — the justification.** The §8 4 GB WASM cap is structural: CSR,
+  ingest buffers and positions must all fit inside it, and ~100M edges does not.
+  `skein-core` already takes `&[u32]` slices, so an mmap'd store needs no
+  algorithm changes. This does not require a benchmark to believe.
+- **Layout — modest, and mostly capacity again.** The WGSL sim is the same
+  shader either way; only the CPU half improves (hierarchy 2.7 s native vs
+  ~4.9 s WASM, before rayon). ~11 s → ~8 s at 1M/10M. The real win is that past
+  the 4 GB cap the browser cannot lay out at all.
+- **Rendering — no win.** Criterion 2, measured.
+- **Filtering — not evidence.** Native DuckDB would beat DuckDB-WASM, but M4's
+  attribute half is unstarted, so this cannot justify anything today.
+
+Therefore **N4 (porting `GraphView.tsx` + `App.tsx`, ~934 lines, to egui) is
+dropped.** It was justified by "fully native is fastest", which criterion 2
+disproved for the render path. The native binary gets a minimal shell — open,
+pan, zoom, seed, HUD — and becomes *the tool for graphs too large for the
+browser*, running beside the web app rather than replacing it.
+
+**N3's density-field rendering is also dropped from the critical path**, because
+sampling is an accepted answer for display: D8's seeded permutation already
+gives an unbiased reproducible sample and is already ported.
+
+**The hybrid (native surface under a transparent webview) is rejected here** on
+a different ground than before: it would require `GraphView` to stop owning its
+canvas, and the web app is to remain untouched.
+
+**Revisit if:** a measured layout win at the 100M tier turns out not to
+materialise (then the native tool is only an ingest/store play, and mmap alone
+may not be worth a second front end); or the attributes work lands and native
+DuckDB shows a filtering gap large enough to reopen the UI question.
+
+### N1 results: the WGSL compute sim, ported (2026-08-02)
+
+`crates/skein-native/src/gpu_layout.rs` + `shader_layout.wgsl` port
+`web/src/layout/gpu.ts` to wgpu. The shader body is verbatim; its `const`
+prelude is generated from `skein_core`'s constants rather than duplicated, so
+the two engines cannot drift. The multilevel driver mirrors
+`MultilevelLayout`'s scheme exactly (`COARSEST_ITERS` halving per level, floor
+`MIN_ITERS`, same `HIERARCHY_TARGET_NODES`/`MAX_LEVELS` as
+`web/src/workers/ingest.ts`) — a different schedule would make the numbers
+incomparable rather than merely different.
+
+The sim runs on the *renderer's* device, cloned into the layout thread, so
+positions live in one GPU allocation that both the compute and vertex stages
+address. `--cpu-layout` forces `skein_core`'s engine for A/B.
+
+**Measured, reference laptop (M3 Air, headed), `medium` 1M/10M:**
+
+| Engine | Total | Hierarchy | Sim |
+|---|---|---|---|
+| **native wgpu compute** | **6.63 s** | 2.88 s | 3.75 s |
+| browser WebGPU tier (M3) | ~11 s | ~4.9 s | ~6.1 s |
+| native CPU (`skein_core`) | 16.90 s | 2.88 s | 14.0 s |
+| browser WASM fallback (D11) | 23.9 s | 4.9 s | 19.0 s |
+
+`clustered` 20k/120k: 0.35 s native GPU, 0.78 s native CPU (browser: 1.9 s
+end-to-end, 1.5 s on the fallback tier).
+
+So the native GPU engine is **1.66× the browser's fast tier** end to end, from
+1.7× on the hierarchy (native Rust vs the same code in WASM, matching D11's
+measured ~1.3× WASM cost plus the win from not re-marshalling) and 1.6× on the
+sim (same shader, no browser validation layer). **Criterion 3b is delivered**;
+the earlier "~11 s → ~8 s" estimate in this document was made while the native
+build was still running the *CPU* engine and comparing it against the browser's
+*GPU* one, which was not a like-for-like comparison.
+
+**The 513-second lesson.** The first correct GPU run took 513 s — 27× slower
+than the CPU engine, with healthy output (no NaNs, sane extent). The shader was
+never at fault: interactive mode had no edge-draw cap, so the renderer was
+drawing all 10M edges every frame (~2 fps per D8) on the *same GPU* the sim was
+using, and the compute queue was starved. Applying D8's 300k cap by default —
+which `GraphView.tsx` has always done, for fill-rate reasons rather than this
+one — took the same run to 6.63 s with **byte-identical position statistics**.
+The browser never hit this because its cap predates the question. Sharing one
+device between sim and renderer is what makes the zero-copy handoff possible and
+is also what makes them competitors; the cap is now load-bearing for both
+reasons.
+
+**Guard added.** `position_stats` prints extent, centroid and a non-finite count
+after every layout, flagging `** COLLAPSED **` or `** NON-FINITE **`. A wrong
+compute shader is characteristically *fast* and wrong — a no-op dispatch, a bad
+binding or a division producing NaNs all yield a quick, plausible-looking
+result. This is the same class of failure as N0's three bogus fps measurements
+and D12's silent WebGL2 draw, and it is now checked rather than assumed.
+
+Determinism (D2) held incidentally: the 513 s and 6.63 s runs produced identical
+position statistics, as did repeat runs. The CPU and GPU engines differ slightly
+from each other, which is expected and in scope for D2 (same machine + same
+engine, not across engines).
+
+### N2 results: the mmap store, and where the capacity ceiling actually is (2026-08-02)
+
+`crates/skein-native/src/store.rs` persists the CSR in its exact in-memory
+layout (64-byte header, then the flat `u32`/`f32` arrays) beside the source as
+`<source>.skein`, and memory-maps it on open. `skein-core` gained `CsrView` plus
+`symmetrize_view` / `build_hierarchy_view`, all additive — the owning entry
+points delegate, so the web and wasm paths are untouched. Ingest now streams the
+CSV through a `BufReader` instead of `fs::read`, which at the 100M tier would
+otherwise hold ~1.5 GB of text resident while the interner grew beside it.
+
+**Measured, `medium` 1M/10M, M3 Air:**
+
+| | first run (builds store) | second run (reuses) |
+|---|---|---|
+| load | 896–914 ms ingest | **0 ms** |
+| layout | 6.72 s | 6.64 s |
+| peak RSS | 2.40 GB | **2.33 GB** |
+
+Store file: 54.9 MB. Positions identical across the round trip, so the store
+preserves determinism (D2).
+
+**What the store delivers: instant reopen. What it does not deliver: headroom.**
+Peak RSS moved 3%. The capacity ceiling is not where D15 assumed it was — it is
+not the input CSR's residency at all. It is `coarsen::symmetrize`, which
+materialises a `Vec<(u64, f32)>` of every edge, mirrors it (doubling the vector),
+then stable-sorts it. At 1M/10M that is ~20M 16-byte entries plus the sort's
+scratch, and it dwarfs the mapping the store saved.
+
+Extrapolated, this is the thing that blocks the 100M-edge target: the pair
+vector alone would be ~6.4 GB before the output CSR exists. Streaming the input
+does not help, because the transient is proportional to *edges*, not to how the
+input was read.
+
+**The fix, not yet done:** rebuild `symmetrize` as a counting sort — degree
+histogram, prefix sum, fill — the same shape `Csr::from_edges` already uses. That
+allocates only the output rather than an intermediate 16-byte-per-edge array,
+should cut peak memory roughly 4×, and is likely faster as well. The constraint
+is D2: the current stable sort is what makes the duplicate-weight merge
+order-deterministic, so a counting-sort version has to reproduce that ordering
+exactly, and it changes shared `skein-core` code that the browser also runs. It
+needs the same bit-identical verification D11 applied to the `cpu.ts` port.
+
+**So criterion 3a is half delivered.** The input side is solved — streaming
+ingest, zero-parse reopen, borrowed adjacency into the hierarchy. The hierarchy
+build is now the binding constraint, and 100M edges is not reachable until
+`symmetrize` stops allocating per-edge. That this only became visible after the
+store was built is the argument for measuring rather than reasoning: the mmap
+was assumed to be the capacity story, and it was in fact worth 3%.
+
+### N2 follow-up: `symmetrize` rebuilt as a counting sort — 100M edges reached (2026-08-02)
+
+The pair-array bottleneck identified above is gone. `coarsen::build_dedup` is
+replaced by `build_dedup_counting`, which takes an `emit` closure called twice —
+once to count per-row sizes, once to fill — so callers stream their
+(source, target, weight) triples instead of materialising them. `symmetrize_view`
+and `coarsen_once` both use it.
+
+**Why it is safe (D2).** A global stable sort by the packed `source<<32|target`
+key is *exactly equivalent* to bucketing by source and stable-sorting each row by
+target: both give ascending sources, ascending targets within a row, and
+duplicates in emission order — which is what makes the `f32` weight merge
+order-deterministic. The equivalence is not argued, it is tested: the previous
+implementation is kept verbatim in the test module as
+`build_dedup_reference`/`symmetrize_reference`, and three tests compare against
+it over random weighted and unweighted graphs, hub-and-isolated-node shapes, and
+a full `coarsen_once` round — asserting `f32` **bit** equality, not approximate
+equality. Same discipline D11 used before deleting `cpu.ts`.
+
+**Measured, `medium` 1M/10M:**
+
+| | before | after |
+|---|---|---|
+| peak RSS | 2.33 GB | **1.18 GB** |
+| hierarchy | 2.87 s | **2.06 s** |
+| layout total | 6.64 s | **5.81 s** |
+
+Halved the memory and got faster — the global sort and its scratch were costing
+time as well as space. Positions bit-identical, as the tests require.
+
+**Criterion 3a, delivered: `huge` (10M nodes / 100M edges, 1.72 GB CSV) lays out
+natively.** New `huge` preset in the fixture generator; native-only by
+construction, since this is past the browser's 4 GB wasm cap (§8).
+
+| | first run | store reused |
+|---|---|---|
+| ingest | 29.0 s | **0 ms** |
+| hierarchy | 51.8 s | 50.5 s |
+| layout total | 91.4 s | 90.1 s |
+| wall | 122.6 s | **92.3 s** |
+| peak RSS | 5.06 GB | 7.12 GB |
+| swaps | **0** | **0** |
+
+Positions identical across both runs (extent 1065x1068, centroid 2399,1323, no
+non-finite values), so determinism holds at this scale too. Store file: 559 MB.
+Peak *footprint* including GPU allocations reached 11.3 GB on a 16 GB machine
+with zero swapping — comfortable but not unlimited, which sets the next ceiling
+honestly at roughly this order rather than an unbounded claim.
+
+The browser cannot run this graph at any speed: the CSR alone exceeds the wasm
+address space. That is the whole justification for the native binary, now
+demonstrated rather than argued.
+
+**Both criteria are now met.** 3b (faster): 5.81 s vs the browser's ~11 s at
+1M/10M, 1.89x. 3a (bigger): 100M edges, which the browser cannot open.
+
+### N2 follow-up 2: the renderer stops expanding every edge (2026-08-02)
+
+The load path built interleaved endpoint pairs for *all* `m` edges, shuffled
+them, and drew a 300k prefix — 800 MB of `u32` at the 100M tier, permuted in
+full so that 0.3% of it could be used. `sample_edge_indices` replaces it with a
+partial Fisher–Yates over a *virtual* identity array, storing only positions a
+swap actually moved: O(k) time and memory regardless of `m`. Targets then come
+straight from the mapping and sources from a `partition_point` search over the
+offsets.
+
+**Measured, `huge` 10M/100M:**
+
+| | before | after |
+|---|---|---|
+| sample/expand | 1551 ms | **87–102 ms** |
+| endpoint heap | 800 MB | **2.4 MB** |
+| load path alone (`--no-layout`) | — | **712 MB, 0.95 s** |
+
+So a 100M-edge graph opens and renders in under a second from a warm store.
+
+**It did not reduce peak RSS, and that is worth recording rather than
+glossing.** Peak went 7.12 GB → ~7.8 GB, stable across three runs (7.65, 7.82,
+7.82 — so this is not measurement noise; RSS here is repeatable to ~2%). Two
+things explain it. The peak occurs during the *hierarchy build*, long after the
+load path, so a load-path saving cannot lower it. And sampling touches ~300k
+scattered pages of the 559 MB store instead of walking it sequentially, which
+appears to keep more mapped pages resident through that peak — trading ~0.7 GB
+of mmap residency for 1.6 GB of heap and GPU. Net: much faster and much lighter
+to *open*, marginally heavier at the *peak*.
+
+The lesson repeats N2's: the win was real but not where the headline metric
+looks. Peak memory at this tier is `symmetrize`, and the remaining leverage is
+making that streaming rather than shaving the load path further.
+
+**Behaviour change worth knowing:** a front-to-back partial shuffle selects a
+different (equally uniform) subset than the back-to-front full shuffle it
+replaces, so the same seed draws a different sample than previous builds did.
+Same file + seed is still reproducible (D2); it is not bit-compatible with
+earlier versions, and `GraphView.tsx` still uses the original scheme.
+
+Sampler and source-lookup correctness are tested (distinctness, range,
+determinism, seed sensitivity, full-permutation case, over-request clamping,
+uniform coverage across the range, and `source_of` against a linear scan
+including empty and leading-empty rows) — an off-by-one there would draw a
+wrong but entirely plausible picture.
+
+### D15 vs D13: the native draw budget is a fixed cap, deliberately for now
+
+D15 was designed and measured against a `main` that predated D13/D13a, so its
+renderer applies a fixed 300k edge cap where the web tier now sizes the sample
+from the camera. The two are not in conflict at the fit view — D13a lowered
+`maxEdges` to 300k at this tier and noted the scaling term can only *reduce* the
+count there, so both front ends draw the same thing on the frame D8 tuned for.
+
+They diverge away from it. D13a measured the fit view is *not* the worst frame:
+zooming out past it collapsed 1M/10M from 57 to 7.8 fps with drawn counts
+bit-identical, which is why `lod.ts` grew a coverage term. skein-native has no
+such term and will hit that trough.
+
+**Not fixed here** because the port is not mechanical: `lod.ts` counts the
+visible share off the M4 pick grid's cell prefix sums, and skein-native has no
+pick grid — D15 dropped the interaction surface along with the UI. Adding one
+is worth doing on its own terms (it is also what hover and selection would
+need), not as a rider on this change.
+
+**Revisit when:** skein-native grows a pick grid, or a user reports the zoomed-
+out trough on real data.

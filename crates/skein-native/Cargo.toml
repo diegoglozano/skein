@@ -1,0 +1,16 @@
+[package]
+name = "skein-native"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native macOS front end for skein: winit + wgpu, no browser (DECISIONS.md D15)"
+
+[dependencies]
+anyhow = "1.0.104"
+bytemuck = "1.25.2"
+memmap2 = "0.9.11"
+pollster = "1.0.1"
+skein-core = { path = "../skein-core" }
+wgpu = "30.0.0"
+winit = "0.30.13"

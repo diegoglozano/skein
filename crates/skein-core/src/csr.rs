@@ -9,7 +9,45 @@ pub struct Csr {
     pub weights: Option<Vec<f32>>,
 }
 
+/// A borrowed CSR: the same struct-of-arrays as [`Csr`], but pointing at
+/// memory this type does not own.
+///
+/// Exists so an adjacency that lives in a memory-mapped file can be fed to the
+/// algorithms without first being copied into `Vec`s. At the 100M-edge tier
+/// that copy is the difference between one resident working set and two
+/// (DECISIONS.md D15). Every function here that only reads a CSR takes this;
+/// the owning [`Csr`] converts with [`Csr::as_view`] for free.
+#[derive(Clone, Copy)]
+pub struct CsrView<'a> {
+    pub offsets: &'a [u32],
+    pub targets: &'a [u32],
+    /// Parallel to `targets` when the source had weights.
+    pub weights: Option<&'a [f32]>,
+}
+
+impl CsrView<'_> {
+    #[inline]
+    pub fn node_count(&self) -> u32 {
+        (self.offsets.len() - 1) as u32
+    }
+
+    #[inline]
+    pub fn edge_count(&self) -> usize {
+        self.targets.len()
+    }
+}
+
 impl Csr {
+    /// Borrow this CSR without copying.
+    #[inline]
+    pub fn as_view(&self) -> CsrView<'_> {
+        CsrView {
+            offsets: &self.offsets,
+            targets: &self.targets,
+            weights: self.weights.as_deref(),
+        }
+    }
+
     /// Build from an unsorted edge list. `n` is the node count; every id in
     /// `sources`/`targets` must be < n. Panics if `sources` and `targets`
     /// (and `weights`, when given) differ in length.

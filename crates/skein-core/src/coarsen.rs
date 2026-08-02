@@ -7,7 +7,7 @@
 //! break toward the smaller label, and coarse ids are assigned in first-seen
 //! order. Same input ⇒ same hierarchy, bit for bit.
 
-use crate::Csr;
+use crate::{Csr, CsrView};
 
 /// One level of the hierarchy. `graph` is the symmetrized, deduplicated
 /// adjacency at this granularity; `parent_map[i]` is node i's index in the
@@ -22,58 +22,112 @@ pub struct HierarchyLevel {
 /// both want. Row order and the duplicate-merge order are fully determined
 /// by a stable sort, so weight sums are order-deterministic.
 pub fn symmetrize(csr: &Csr) -> Csr {
-    let n = csr.node_count();
-    let mut pairs: Vec<(u64, f32)> = Vec::with_capacity(2 * csr.edge_count());
-    for u in 0..n {
-        let start = csr.offsets[u as usize] as usize;
-        let end = csr.offsets[u as usize + 1] as usize;
-        for e in start..end {
-            let v = csr.targets[e];
-            if v == u {
-                continue;
-            }
-            let w = csr.weights.as_ref().map_or(1.0, |ws| ws[e]);
-            pairs.push((((u as u64) << 32) | v as u64, w));
-        }
-    }
-    build_dedup(n, pairs, true)
+    symmetrize_view(csr.as_view())
 }
 
-/// Sort (packed source<<32|target, weight) pairs, merge duplicates by summing
-/// weights, and emit a CSR. `mirror` also inserts the reversed edge first.
-fn build_dedup(n: u32, mut pairs: Vec<(u64, f32)>, mirror: bool) -> Csr {
-    if mirror {
-        let len = pairs.len();
-        pairs.reserve(len);
-        for i in 0..len {
-            let (key, w) = pairs[i];
-            let (u, v) = (key >> 32, key & 0xffff_ffff);
-            pairs.push(((v << 32) | u, w));
+/// [`symmetrize`] over a borrowed CSR — the entry point for an adjacency that
+/// lives in a memory-mapped file rather than on the heap (D15).
+pub fn symmetrize_view(csr: CsrView<'_>) -> Csr {
+    let n = csr.node_count();
+    build_dedup_counting(n, |out| {
+        // Emission order matters (D2): every forward edge, then every mirror,
+        // which is exactly the order the reference implementation pushed them
+        // in before its global stable sort.
+        for u in 0..n {
+            let start = csr.offsets[u as usize] as usize;
+            let end = csr.offsets[u as usize + 1] as usize;
+            for e in start..end {
+                let v = csr.targets[e];
+                if v != u {
+                    out(u, v, csr.weights.map_or(1.0, |ws| ws[e]));
+                }
+            }
         }
-    }
-    // Stable sort: equal keys keep insertion order, so the f32 merge below
-    // sums in a fully determined order.
-    pairs.sort_by_key(|&(key, _)| key);
+        for u in 0..n {
+            let start = csr.offsets[u as usize] as usize;
+            let end = csr.offsets[u as usize + 1] as usize;
+            for e in start..end {
+                let v = csr.targets[e];
+                if v != u {
+                    out(v, u, csr.weights.map_or(1.0, |ws| ws[e]));
+                }
+            }
+        }
+    })
+}
 
+/// Bucket (source, target, weight) triples by source, sort each row by target,
+/// merge duplicates by summing weights, and emit a CSR.
+///
+/// `emit` is called **twice** — once to count per-row sizes, once to fill — so
+/// the caller streams its triples rather than materialising them. That is the
+/// whole point: the previous implementation built a `Vec<(u64, f32)>` of every
+/// edge (16 bytes each, mirrored, then globally sorted with its own scratch),
+/// which at the 100M-edge tier is several GB before the output CSR exists and
+/// was measured as the binding constraint on graph size (DECISIONS.md D15/N2).
+/// `emit` must produce identical triples in identical order on both calls.
+///
+/// **Determinism (D2).** A global stable sort by the packed `source<<32|target`
+/// key is exactly equivalent to bucketing by source and stable-sorting each row
+/// by target: both yield rows in ascending source, targets ascending within a
+/// row, and — critically for the `f32` weight merge below — duplicates in
+/// emission order. The equivalence is verified against the original
+/// implementation in this module's tests, which keep it as a reference.
+fn build_dedup_counting<F>(n: u32, mut emit: F) -> Csr
+where
+    F: FnMut(&mut dyn FnMut(u32, u32, f32)),
+{
+    // Pass 1: how many triples land in each row.
+    let mut row_start = vec![0u32; n as usize + 1];
+    emit(&mut |source, _target, _weight| {
+        row_start[source as usize] += 1;
+    });
+    let mut total = 0u32;
+    for slot in row_start.iter_mut() {
+        let count = *slot;
+        *slot = total;
+        total += count;
+    }
+    let total = total as usize;
+
+    // Pass 2: place each triple at its row's cursor, preserving emission order
+    // within the row.
+    let mut entries: Vec<(u32, f32)> = vec![(0, 0.0); total];
+    let mut cursor = row_start.clone();
+    emit(&mut |source, target, weight| {
+        let at = &mut cursor[source as usize];
+        entries[*at as usize] = (target, weight);
+        *at += 1;
+    });
+    drop(cursor);
+
+    // Pass 3: per-row stable sort, then merge equal targets in place.
     let mut offsets = vec![0u32; n as usize + 1];
-    let mut targets = Vec::new();
-    let mut weights = Vec::new();
-    let mut i = 0;
-    while i < pairs.len() {
-        let key = pairs[i].0;
-        let mut w = 0.0f32;
-        while i < pairs.len() && pairs[i].0 == key {
-            w += pairs[i].1;
-            i += 1;
+    let mut targets = Vec::with_capacity(total);
+    let mut weights = Vec::with_capacity(total);
+    for source in 0..n as usize {
+        // row_start has n+1 slots and the prefix sum leaves row_start[n] ==
+        // total, so the upper bound is always in range.
+        let start = row_start[source] as usize;
+        let end = row_start[source + 1] as usize;
+        let row = &mut entries[start..end];
+        // Stable: equal targets keep emission order, matching the global sort
+        // the reference implementation performed.
+        row.sort_by_key(|&(target, _)| target);
+        let mut i = 0;
+        while i < row.len() {
+            let target = row[i].0;
+            let mut w = 0.0f32;
+            while i < row.len() && row[i].0 == target {
+                w += row[i].1;
+                i += 1;
+            }
+            targets.push(target);
+            weights.push(w);
         }
-        let source = (key >> 32) as u32;
-        offsets[source as usize + 1] += 1;
-        targets.push((key & 0xffff_ffff) as u32);
-        weights.push(w);
+        offsets[source + 1] = targets.len() as u32;
     }
-    for i in 1..offsets.len() {
-        offsets[i] += offsets[i - 1];
-    }
+
     Csr {
         offsets,
         targets,
@@ -171,26 +225,38 @@ pub fn coarsen_once(sym: &Csr, max_cluster: u32, sweeps: u32) -> Option<(Vec<u32
         return None;
     }
 
-    // Aggregate fine edges into the coarse graph.
-    let mut pairs: Vec<(u64, f32)> = Vec::new();
-    for u in 0..n {
-        let cu = map[u];
-        for e in sym.offsets[u] as usize..sym.offsets[u + 1] as usize {
-            let cv = map[sym.targets[e] as usize];
-            if cu != cv {
-                pairs.push((((cu as u64) << 32) | cv as u64, weights[e]));
+    // Aggregate fine edges into the coarse graph. Streamed for the same reason
+    // symmetrize is: at the finest level this ran over every symmetrized edge.
+    let coarse = build_dedup_counting(coarse_n, |out| {
+        for u in 0..n {
+            let cu = map[u];
+            for e in sym.offsets[u] as usize..sym.offsets[u + 1] as usize {
+                let cv = map[sym.targets[e] as usize];
+                if cu != cv {
+                    out(cu, cv, weights[e]);
+                }
             }
         }
-    }
-    let coarse = build_dedup(coarse_n, pairs, false);
+    });
     Some((map, coarse))
 }
 
 /// Build the full hierarchy: level 0 is the symmetrized input; coarsening
 /// stops at `target_nodes`, after `max_levels`, or when propagation stalls.
 pub fn build_hierarchy(csr: &Csr, target_nodes: u32, max_levels: usize) -> Vec<HierarchyLevel> {
+    build_hierarchy_view(csr.as_view(), target_nodes, max_levels)
+}
+
+/// [`build_hierarchy`] over a borrowed CSR. Only the finest level reads the
+/// input; every coarser level is owned data this function produces, so this is
+/// the single place the mmap needs to reach (D15).
+pub fn build_hierarchy_view(
+    csr: CsrView<'_>,
+    target_nodes: u32,
+    max_levels: usize,
+) -> Vec<HierarchyLevel> {
     let mut levels = vec![HierarchyLevel {
-        graph: symmetrize(csr),
+        graph: symmetrize_view(csr),
         parent_map: Vec::new(),
     }];
     while levels.len() < max_levels {
@@ -214,6 +280,161 @@ pub fn build_hierarchy(csr: &Csr, target_nodes: u32, max_levels: usize) -> Vec<H
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pre-D15/N2 implementation, kept verbatim as the reference the
+    /// counting-sort version must reproduce **bit for bit** — the weight merge
+    /// is `f32` addition, so a different summation order is a different graph
+    /// and would silently change every layout downstream (D2). Same discipline
+    /// D11 used when replacing `cpu.ts`.
+    fn build_dedup_reference(n: u32, mut pairs: Vec<(u64, f32)>, mirror: bool) -> Csr {
+        if mirror {
+            let len = pairs.len();
+            pairs.reserve(len);
+            for i in 0..len {
+                let (key, w) = pairs[i];
+                let (u, v) = (key >> 32, key & 0xffff_ffff);
+                pairs.push(((v << 32) | u, w));
+            }
+        }
+        pairs.sort_by_key(|&(key, _)| key);
+
+        let mut offsets = vec![0u32; n as usize + 1];
+        let mut targets = Vec::new();
+        let mut weights = Vec::new();
+        let mut i = 0;
+        while i < pairs.len() {
+            let key = pairs[i].0;
+            let mut w = 0.0f32;
+            while i < pairs.len() && pairs[i].0 == key {
+                w += pairs[i].1;
+                i += 1;
+            }
+            let source = (key >> 32) as u32;
+            offsets[source as usize + 1] += 1;
+            targets.push((key & 0xffff_ffff) as u32);
+            weights.push(w);
+        }
+        for i in 1..offsets.len() {
+            offsets[i] += offsets[i - 1];
+        }
+        Csr {
+            offsets,
+            targets,
+            weights: Some(weights),
+        }
+    }
+
+    /// `symmetrize` as it was before the rewrite.
+    fn symmetrize_reference(csr: &Csr) -> Csr {
+        let n = csr.node_count();
+        let mut pairs: Vec<(u64, f32)> = Vec::with_capacity(2 * csr.edge_count());
+        for u in 0..n {
+            let start = csr.offsets[u as usize] as usize;
+            let end = csr.offsets[u as usize + 1] as usize;
+            for e in start..end {
+                let v = csr.targets[e];
+                if v == u {
+                    continue;
+                }
+                let w = csr.weights.as_ref().map_or(1.0, |ws| ws[e]);
+                pairs.push((((u as u64) << 32) | v as u64, w));
+            }
+        }
+        build_dedup_reference(n, pairs, true)
+    }
+
+    fn assert_csr_identical(a: &Csr, b: &Csr, what: &str) {
+        assert_eq!(a.offsets, b.offsets, "{what}: offsets differ");
+        assert_eq!(a.targets, b.targets, "{what}: targets differ");
+        // Bit comparison, not approximate: a different f32 summation order is
+        // exactly what this is guarding against.
+        let (wa, wb) = (a.weights.as_deref(), b.weights.as_deref());
+        match (wa, wb) {
+            (Some(wa), Some(wb)) => {
+                assert_eq!(wa.len(), wb.len(), "{what}: weight lengths differ");
+                for (i, (x, y)) in wa.iter().zip(wb).enumerate() {
+                    assert_eq!(x.to_bits(), y.to_bits(), "{what}: weight {i} differs");
+                }
+            }
+            (x, y) => assert_eq!(x.is_some(), y.is_some(), "{what}: weight presence"),
+        }
+    }
+
+    /// xorshift64* — a local generator so these cases don't depend on the
+    /// layout module's RNG.
+    fn rng_graph(n: u32, m: usize, seed: u64, weighted: bool) -> Csr {
+        let mut s = seed | 1;
+        let mut next = || {
+            s ^= s >> 12;
+            s ^= s << 25;
+            s ^= s >> 27;
+            s.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        };
+        let mut sources = Vec::with_capacity(m);
+        let mut targets = Vec::with_capacity(m);
+        let mut weights = Vec::with_capacity(m);
+        for _ in 0..m {
+            sources.push((next() % u64::from(n)) as u32);
+            targets.push((next() % u64::from(n)) as u32);
+            // Small integral weights make duplicate runs common, which is the
+            // case where summation order could show up.
+            weights.push((next() % 7) as f32 + 0.5);
+        }
+        Csr::from_edges(
+            n,
+            &sources,
+            &targets,
+            weighted.then_some(weights.as_slice()),
+        )
+    }
+
+    #[test]
+    fn counting_sort_symmetrize_matches_the_reference() {
+        // Dense duplicates, self-loops, hubs and isolated nodes all appear
+        // across these shapes.
+        for &(n, m) in &[(8u32, 40usize), (64, 500), (200, 3000), (1000, 20000)] {
+            for weighted in [false, true] {
+                let csr = rng_graph(n, m, 0x5eed ^ u64::from(n), weighted);
+                let got = symmetrize(&csr);
+                let want = symmetrize_reference(&csr);
+                assert_csr_identical(&got, &want, &format!("n={n} m={m} weighted={weighted}"));
+            }
+        }
+    }
+
+    #[test]
+    fn counting_sort_handles_hubs_and_empty_rows() {
+        // One hub every node points at, plus nodes with no edges at all.
+        let n = 50u32;
+        let sources: Vec<u32> = (1..n).collect();
+        let targets: Vec<u32> = vec![0; (n - 1) as usize];
+        let csr = Csr::from_edges(n + 10, &sources, &targets, None);
+        assert_csr_identical(&symmetrize(&csr), &symmetrize_reference(&csr), "hub");
+    }
+
+    #[test]
+    fn counting_sort_coarsen_matches_reference_hierarchy() {
+        // coarsen_once also switched to the counting-sort dedup; verify the
+        // whole hierarchy it produces is unchanged.
+        let csr = rng_graph(2000, 30000, 0xc0ffee, true);
+        let sym = symmetrize(&csr);
+        let (map, coarse) = coarsen_once(&sym, 32, 5).expect("coarsens");
+
+        let weights = sym.weights.as_ref().unwrap();
+        let mut pairs: Vec<(u64, f32)> = Vec::new();
+        let coarse_n = map.iter().copied().max().unwrap() + 1;
+        for u in 0..sym.node_count() as usize {
+            let cu = map[u];
+            for e in sym.offsets[u] as usize..sym.offsets[u + 1] as usize {
+                let cv = map[sym.targets[e] as usize];
+                if cu != cv {
+                    pairs.push((((cu as u64) << 32) | cv as u64, weights[e]));
+                }
+            }
+        }
+        let want = build_dedup_reference(coarse_n, pairs, false);
+        assert_csr_identical(&coarse, &want, "coarse");
+    }
 
     fn line_graph(n: u32) -> Csr {
         let sources: Vec<u32> = (0..n - 1).collect();
