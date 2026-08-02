@@ -1513,6 +1513,15 @@ That is the honest ceiling for this pass: what remains is `lod` (146s, inherent
 the two `no-network` runs (173s across both projects), and nine styled captures
 that are irreducibly ~3s each until CI has a GPU.
 
+**Postscript (merge with D18's `mobile.spec.ts`).** D18 landed three phone
+tests while this was in flight, each paying its own ingest and layout — the
+pattern above, arriving the same day it was written down, which is the argument
+for writing it down. Its own comment had already noticed it ("each of these
+costs a full ingest and layout" is why the pinch and button paths share one
+test). They now share a page too, ordered so the zoom test runs last: it ends on
+a deliberate zoom-out below fit, the one piece of camera state the others would
+notice. 156.4s -> 80.4s, 3/3 passing.
+
 **Revisit if:** the suite grows another DuckDB-dependent spec (share the group
 rather than adding an eighth cold start), someone proposes an fps-driven or
 viewport-driven speedup (both measured, both buy nothing — see above), or CI

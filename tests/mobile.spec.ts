@@ -6,10 +6,12 @@
 // Everything here runs at 390×844 with touch enabled; the rest of the suite
 // runs at Playwright's default 1280×720, which is the docked-sidebar layout.
 
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { ingestAndLayout } from './helpers';
 
-test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, deviceScaleFactor: 2 });
+const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, deviceScaleFactor: 2 };
+
+test.use(PHONE);
 
 /** Live camera zoom, published by the render loop. */
 const zoomOf = (page: import('@playwright/test').Page) =>
@@ -43,10 +45,29 @@ async function pinch(
   await client.detach();
 }
 
-test('the canvas gets the screen and the explore panel is a sheet', async ({ page }) => {
-  test.setTimeout(180_000);
-  await ingestAndLayout(page, 'tiny.csv');
+// One laid-out `tiny` for all three (D19). Each used to pay its own ingest and
+// layout — the cost the zoom test's own comment already noticed when it merged
+// the pinch and button paths into one test. Nothing here destroys the graph, so
+// the only constraint is order: the zoom test leaves the camera below fit, so
+// it goes last, and the tap test re-centres the camera itself via search.
+test.describe.configure({ mode: 'serial', timeout: 300_000 });
 
+let page: Page;
+
+test.beforeAll(async ({ browser }, testInfo) => {
+  const context = await browser.newContext({
+    ...PHONE,
+    baseURL: (testInfo.project.use as { baseURL?: string }).baseURL,
+  });
+  page = await context.newPage();
+  await ingestAndLayout(page, 'tiny.csv');
+});
+
+test.afterAll(async () => {
+  await page?.context().close();
+});
+
+test('the canvas gets the screen and the explore panel is a sheet', async () => {
   const viewport = page.viewportSize()!;
   const canvas = (await page.locator('canvas').boundingBox())!;
   // The old layout gave the canvas 390 − 272 = 118 px of width.
@@ -71,44 +92,7 @@ test('the canvas gets the screen and the explore panel is a sheet', async ({ pag
   );
 });
 
-// Both zoom paths in one test: each of these costs a full ingest and layout,
-// and they assert the same property against the same settled view.
-test('the camera zooms — by pinch, and by button', async ({ page }) => {
-  test.setTimeout(180_000);
-  await ingestAndLayout(page, 'tiny.csv');
-
-  const canvas = (await page.locator('canvas').boundingBox())!;
-  const centre = { x: canvas.x + canvas.width / 2, y: canvas.y + canvas.height / 2 };
-
-  const before = await zoomOf(page);
-  await pinch(page, centre, 80, 240);
-  const spread = await zoomOf(page);
-  // Fingers 3× apart is a 3× zoom; allow slack for the event pipeline, but
-  // nothing near 1 may pass — that is the bug this test exists for.
-  expect(spread / before).toBeGreaterThan(2);
-
-  await pinch(page, centre, 240, 80);
-  const pinched = await zoomOf(page);
-  expect(pinched / spread).toBeLessThan(0.5);
-  expect(pinched).toBeCloseTo(before, 5);
-
-  const fitted = await zoomOf(page);
-  await page.getByRole('button', { name: 'zoom in' }).click();
-  await page.getByRole('button', { name: 'zoom in' }).click();
-  const zoomedIn = await zoomOf(page);
-  expect(zoomedIn).toBeGreaterThan(fitted * 2);
-
-  await page.getByRole('button', { name: 'fit graph to view' }).click();
-  expect(await zoomOf(page)).toBeCloseTo(fitted, 5);
-
-  await page.getByRole('button', { name: 'zoom out' }).click();
-  expect(await zoomOf(page)).toBeLessThan(fitted);
-});
-
-test('a tap selects a node and raises the sheet', async ({ page }) => {
-  test.setTimeout(180_000);
-  await ingestAndLayout(page, 'tiny.csv');
-
+test('a tap selects a node and raises the sheet', async () => {
   // Centre a known node, then tap where it now is: the tap has to survive the
   // fingertip slack, and selecting has to bring the panel up with it.
   await page.getByTestId('explore-toggle').click();
@@ -135,4 +119,36 @@ test('a tap selects a node and raises the sheet', async ({ page }) => {
   expect((await page.getByLabel('explore panel').boundingBox())!.y).toBeGreaterThan(
     viewport.height - 64,
   );
+});
+
+// Both zoom paths in one test: they assert the same property against the same
+// settled view. Last in the file — it ends on a deliberate zoom-out, which is
+// the one piece of state the others would notice.
+test('the camera zooms — by pinch, and by button', async () => {
+  const canvas = (await page.locator('canvas').boundingBox())!;
+  const centre = { x: canvas.x + canvas.width / 2, y: canvas.y + canvas.height / 2 };
+
+  const before = await zoomOf(page);
+  await pinch(page, centre, 80, 240);
+  const spread = await zoomOf(page);
+  // Fingers 3× apart is a 3× zoom; allow slack for the event pipeline, but
+  // nothing near 1 may pass — that is the bug this test exists for.
+  expect(spread / before).toBeGreaterThan(2);
+
+  await pinch(page, centre, 240, 80);
+  const pinched = await zoomOf(page);
+  expect(pinched / spread).toBeLessThan(0.5);
+  expect(pinched).toBeCloseTo(before, 5);
+
+  const fitted = await zoomOf(page);
+  await page.getByRole('button', { name: 'zoom in' }).click();
+  await page.getByRole('button', { name: 'zoom in' }).click();
+  const zoomedIn = await zoomOf(page);
+  expect(zoomedIn).toBeGreaterThan(fitted * 2);
+
+  await page.getByRole('button', { name: 'fit graph to view' }).click();
+  expect(await zoomOf(page)).toBeCloseTo(fitted, 5);
+
+  await page.getByRole('button', { name: 'zoom out' }).click();
+  expect(await zoomOf(page)).toBeLessThan(fitted);
 });
