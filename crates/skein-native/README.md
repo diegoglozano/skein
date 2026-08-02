@@ -71,6 +71,13 @@ tmpfs pages are backed by swap, not a disk, so the scratch would evict nothing
 while appearing to work. The default is the store's directory, which is the disk
 already holding this graph.
 
+Two things it does not do. Ingest still builds the CSR on the heap before writing
+the store, and that is now the largest anonymous transient in the pipeline — but
+it is a one-time cost per file, since reopening from the store skips it entirely.
+And the WGSL sim uploads each level into wgpu buffers, so out-of-core makes a
+level cheap to hold, not cheap to simulate on the GPU; at the extreme tier pair
+it with `--cpu-layout`, which reads the mapping in place.
+
 The renderer never expands every edge. `sample_edge_indices` picks the drawn
 sample with a partial Fisher–Yates over a *virtual* identity array — O(k) in
 time and memory regardless of graph size — so a 300k-edge sample of a 100M-edge

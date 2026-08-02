@@ -195,14 +195,21 @@ mod mapped {
             // process with a unique name, is unlinked immediately below on Unix,
             // and is never opened by anything else.
             let map = unsafe { memmap2::MmapMut::map_mut(&file)? };
-            #[cfg(unix)]
-            let path = {
+
+            // Unlink now where the platform allows it: the mapping keeps the
+            // inode alive, and a crash then cannot strand gigabytes of scratch.
+            // Where it does not, the slab deletes on drop instead.
+            let unlink_on_drop = if cfg!(unix) {
                 std::fs::remove_file(&path)?;
                 None
+            } else {
+                Some(path)
             };
-            #[cfg(not(unix))]
-            let path = Some(path);
-            Ok(Box::new(MmapSlab { map, len, path }))
+            Ok(Box::new(MmapSlab {
+                map,
+                len,
+                unlink_on_drop,
+            }))
         }
 
         fn band_len(&self) -> usize {
@@ -217,13 +224,13 @@ mod mapped {
     struct MmapSlab {
         map: memmap2::MmapMut,
         len: usize,
-        /// Some only where the file could not be unlinked while mapped.
-        path: Option<PathBuf>,
+        /// Some only where the file could not be unlinked while still mapped.
+        unlink_on_drop: Option<PathBuf>,
     }
 
     impl Drop for MmapSlab {
         fn drop(&mut self) {
-            if let Some(path) = &self.path {
+            if let Some(path) = &self.unlink_on_drop {
                 let _ = std::fs::remove_file(path);
             }
         }

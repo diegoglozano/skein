@@ -1158,24 +1158,32 @@ took on the M3 Air.
 |---|---|---|---|
 | hierarchy | 4.71 s | 4.66 s | 5.35–5.63 s |
 | peak RSS | 512 MB | 496 MB | 517 MB |
-| **anonymous memory required** | **700 MB** | **600 MB** | **200 MB** |
+| **anonymous memory required** | **650 MB** | **500 MB** | **80 MB** |
 
 **Peak RSS is the wrong metric here, and running the two tiers unconstrained
 will say they are identical.** With 15 GB free the kernel has no reason to evict
 anything, so mapped pages stay resident and count toward RSS exactly as
 anonymous ones do. The difference is not how much is resident, it is whether it
-*has to be*. The bottom row is `ulimit -d`, which bounds anonymous mappings and
-deliberately does not bound file-backed ones — the smallest limit at which the
-run completes rather than aborting. 3.5× less RAM required, and what remains is
-the node-sized arrays plus ingest, as designed.
+*has to be*.
 
-The heap path's own improvement is smaller than the arithmetic suggests (700 →
-600 MB, not 2×) and the reason is worth recording: the intermediate array this
+The bottom row is that question, and it is the result: the smallest
+`RLIMIT_DATA` at which the build completes instead of aborting in the allocator.
+`RLIMIT_DATA` bounds anonymous mappings and deliberately does not bound
+file-backed ones, which makes it exactly the discriminator. The harness applies
+it *after* ingest and after `malloc_trim`, so it measures the hierarchy build
+rather than the pipeline — at the 100M tier ingest's own transient is larger
+than anything the hierarchy needs out-of-core, and a process-wide `ulimit -d`
+would measure only that. **8.1× less RAM required**, and what remains is the
+node-sized arrays plus the input CSR, which `skein-native` would have mmap'd
+rather than allocated.
+
+The heap path's own improvement is smaller than the arithmetic suggests (650 →
+500 MB, not 2×) and the reason is worth recording: the intermediate array this
 change removed was only the *peak* at level 0, and at this graph's shape the
 global peak is at level 2, where three levels are live at once and the old
 output `Vec::with_capacity` never touched its slack. Halving level 0's transient
-moved the global peak by 3%. The mmap tier is where the capacity actually comes
-from.
+moved the global peak by a fifth. The mmap tier is where the capacity actually
+comes from.
 
 Layout is 15–20% slower out-of-core at this size, from the extra emit passes and
 page faults. That is the trade being bought, and it only applies when the flag is
@@ -1205,6 +1213,17 @@ and both entry points default it to the directory the graph came from (beside
 - **~4.29B arcs is the format's ceiling**, not this function's — §4.2 makes CSR
   offsets `u32`. It is now an explicit assert with a message rather than a silent
   wrap.
+- **Ingest is the next anonymous transient**, and it is now the largest one in
+  the native pipeline: building the CSR from a 1.72 GB CSV peaked at 1366 MB
+  here. It is a one-time phase — D15/N2's store makes reopening cost 0 ms — so
+  it bounds the first run on a given file, not every run. Moving it would be
+  separate work.
+- **The GPU sim still uploads each level to device memory.** `--out-of-core`
+  makes a level cheap to *hold*, not cheap to *simulate on the GPU*, because
+  `LevelSim` copies offsets/targets/weights into wgpu buffers. At the extreme
+  tier it pairs with `--cpu-layout`, which reads the mapping in place. This is
+  the same GPU-capacity observation D15 opened with, arriving from the other
+  direction.
 
 **Revisit if:** a real dataset makes the extra emit passes hurt more than the
 capacity is worth (the fix is a larger band, or emitting into a per-band buffer);

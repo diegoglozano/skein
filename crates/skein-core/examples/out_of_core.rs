@@ -20,14 +20,25 @@
 //! Resident memory is not the number to read here, and running it unconstrained
 //! will suggest the tiers are identical. Under no memory pressure the kernel
 //! keeps mapped pages resident, so RSS is the same either way; the difference is
-//! that those pages *can* be evicted. Constrain anonymous memory to see it —
-//! `ulimit -d` bounds anonymous mappings and deliberately does not bound
-//! file-backed ones:
+//! that those pages *can* be evicted. What separates the tiers is how much
+//! anonymous memory a run *requires*, so `--limit-mb N` caps `RLIMIT_DATA` —
+//! which bounds anonymous mappings and deliberately does not bound file-backed
+//! ones. The cap is applied **after** ingest and after returning free heap to
+//! the OS, so it measures the hierarchy build rather than the pipeline: at the
+//! 100M tier ingest's own transient is larger than anything the hierarchy needs
+//! out-of-core, and wrapping the whole process in `ulimit -d` would measure only
+//! that.
 //!
 //! ```sh
-//! ( ulimit -d 300000; ... --scratch heap )   # aborts at 1M/10M
-//! ( ulimit -d 300000; ... --scratch mmap )   # completes, same checksums
+//! ... --scratch heap --limit-mb 600    # aborts at 1M/10M
+//! ... --scratch mmap --limit-mb 600    # completes, same checksums
 //! ```
+//!
+//! One thing the figure still includes that `skein-native` would not: the input
+//! CSR sits on the heap here, because `skein-core` has no store — natively it is
+//! the mmap'd `<source>.skein` and costs no anonymous memory at all. So the
+//! out-of-core floor reported here is an over-estimate by roughly
+//! `4 * (nodes + edges)` bytes.
 
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -96,6 +107,32 @@ mod rss {
     }
 }
 
+/// Cap anonymous memory for everything that follows. Linux only, and that is
+/// fine: this is a measurement affordance, not a feature.
+#[cfg(target_os = "linux")]
+fn limit_anonymous_mb(mb: u64) {
+    // Return anything the allocator is holding free first, or retained arenas
+    // from ingest count against the cap and the measurement is of ingest's
+    // leftovers rather than of the hierarchy.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+    let bytes = mb * 1024 * 1024;
+    let lim = libc::rlimit {
+        rlim_cur: bytes,
+        rlim_max: bytes,
+    };
+    // SAFETY: a well-formed rlimit for a limit this process is allowed to lower.
+    let rc = unsafe { libc::setrlimit(libc::RLIMIT_DATA, &lim) };
+    assert_eq!(rc, 0, "setrlimit(RLIMIT_DATA) failed");
+    println!("anonymous memory capped at {mb} MB for the hierarchy build");
+}
+
+#[cfg(not(target_os = "linux"))]
+fn limit_anonymous_mb(_mb: u64) {
+    eprintln!("--limit-mb is Linux-only; ignoring");
+}
+
 #[cfg(not(target_os = "linux"))]
 mod rss {
     pub fn peak_mb() -> Option<f64> {
@@ -136,6 +173,7 @@ fn main() -> std::io::Result<()> {
     let mut mode = "heap".to_string();
     let mut band_mb = 256usize;
     let mut scratch_dir: Option<String> = None;
+    let mut limit_mb: Option<u64> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -151,6 +189,10 @@ fn main() -> std::io::Result<()> {
                 i += 1;
                 scratch_dir = Some(args[i].clone());
             }
+            "--limit-mb" => {
+                i += 1;
+                limit_mb = Some(args[i].parse().expect("--limit-mb N"));
+            }
             other => path = Some(other.to_string()),
         }
         i += 1;
@@ -158,7 +200,7 @@ fn main() -> std::io::Result<()> {
     let Some(path) = path else {
         eprintln!(
             "usage: out_of_core <edges.csv> [--scratch heap|mmap] [--band-mb N] \
-             [--scratch-dir DIR]"
+             [--scratch-dir DIR] [--limit-mb N]"
         );
         std::process::exit(2);
     };
@@ -200,6 +242,9 @@ fn main() -> std::io::Result<()> {
 
     // Everything above is setup; the high-water mark from here is the number.
     rss::reset_peak();
+    if let Some(mb) = limit_mb {
+        limit_anonymous_mb(mb);
+    }
     let t1 = Instant::now();
     let levels = build_hierarchy_in(
         csr.as_view(),

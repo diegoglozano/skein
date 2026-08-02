@@ -19,6 +19,11 @@ bytemuck = "1.25.2"
 memmap2 = "0.9.11"
 
 [dev-dependencies]
+# examples/out_of_core.rs only: setrlimit + malloc_trim, so a memory limit can be
+# applied to the hierarchy build alone rather than to the whole process. Not a
+# library dependency, so the wasm build never sees it.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2.189"
 
 [package.metadata.dist]
 # Library crate — nothing to ship as a binary.

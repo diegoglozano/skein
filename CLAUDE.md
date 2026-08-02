@@ -216,9 +216,10 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   streamed is O(edges). Opt-in via `skein-native --out-of-core`
   [`--scratch-dir DIR`] [`--band-mb N`]; **never point it at tmpfs** (swap-backed,
   evicts nothing, looks like it worked). Measured on this container at 1M/10M:
-  anonymous memory *required* 700 MB → 600 MB (heap) → **200 MB (mmap)**, layout
-  15–20% slower out-of-core. Peak RSS is the wrong metric and says the tiers are
-  identical — unconstrained, mapped pages just stay resident; see D16.
+  anonymous memory *required* by the hierarchy build 650 MB → 500 MB (heap) →
+  **80 MB (mmap)**, layout 15–20% slower out-of-core. Peak RSS is the wrong
+  metric and says the tiers are identical — unconstrained, mapped pages just stay
+  resident; see D16.
   Bit-identity is the constraint: the same reference implementation the D15/N2
   tests kept is now asserted against **every** storage policy (heap, forced bands
   of 1/3/17/1024, mmap), and `cargo run --release --example out_of_core` prints

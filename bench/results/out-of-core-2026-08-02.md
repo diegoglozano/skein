@@ -18,7 +18,7 @@ Fixtures are generated, never committed: `node bench/generate-fixtures.mjs mediu
 |---|---|---|---|
 | hierarchy | 4.71 s | 4.66 s | 5.35–5.63 s |
 | peak RSS | 512 MB | 496 MB | 517 MB |
-| **anonymous memory required** | **700 MB** | **600 MB** | **200 MB** |
+| **anonymous memory required** | **650 MB** | **500 MB** | **80 MB** |
 
 ## `huge` — 10M nodes / 100M edges (1.72 GB CSV)
 
@@ -41,19 +41,27 @@ L3     149942 nodes      4155626 arcs   checksum babe3cda56e80407
 
 Run unconstrained, the tiers look identical: with 15 GB free the kernel has no
 reason to evict anything, so mapped pages stay resident and count toward RSS
-exactly as anonymous pages do. Peak RSS answers "how much *was* resident", and
-the question this change is about is "how much *has to be*".
+exactly as anonymous pages do. Peak RSS answers "how much *was* resident"; the
+question this change is about is "how much *has to be*".
 
-`ulimit -d` sets `RLIMIT_DATA`, which since Linux 4.7 bounds anonymous mappings
-and deliberately does **not** bound file-backed ones. So it is exactly the
-discriminator: the reported figure is the smallest limit at which the run
-completes instead of aborting in the allocator, bisected over the values in
-`/tmp/floors.sh`-style sweeps.
+`RLIMIT_DATA` bounds anonymous mappings and, since Linux 4.7, deliberately does
+**not** bound file-backed ones — exactly the discriminator. The harness's
+`--limit-mb N` sets it *after* ingest and after `malloc_trim(0)`, so the figure
+describes the hierarchy build rather than the whole pipeline. That matters: at
+the 100M tier ingest's own transient is larger than anything the hierarchy needs
+out-of-core, so a process-wide `ulimit -d` would measure ingest and report the
+tiers as equal. Each figure is the smallest limit at which the build completes
+instead of aborting in the allocator.
 
 ```sh
-( ulimit -d 300000; ./out_of_core bench/fixtures/medium.csv --scratch heap )  # aborts
-( ulimit -d 300000; ./out_of_core bench/fixtures/medium.csv --scratch mmap )  # completes
+./out_of_core bench/fixtures/medium.csv --scratch heap --limit-mb 400   # aborts
+./out_of_core bench/fixtures/medium.csv --scratch mmap --limit-mb 400   # completes
 ```
+
+The out-of-core figures are over-estimates for `skein-native` by roughly
+`4 * (nodes + edges)` bytes: this harness holds the *input* CSR on the heap
+because `skein-core` has no store, where the native binary maps
+`<source>.skein` and pays nothing anonymous for it.
 
 ## Determinism (D2)
 
