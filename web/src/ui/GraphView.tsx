@@ -38,10 +38,36 @@ export const DEFAULT_SEED = 42;
 
 /** Cursor slack for hit-testing, in CSS pixels. */
 const PICK_RADIUS_PX = 12;
+/** The same slack for a fingertip, which has no pixel to be precise about. */
+const TOUCH_PICK_RADIUS_PX = 24;
 /** Pointer travel below this (CSS px) between down and up counts as a click. */
 const CLICK_SLOP_PX = 4;
+/** A finger wobbles more than a mouse does while tapping. */
+const TOUCH_CLICK_SLOP_PX = 12;
+/** Step for the on-screen zoom buttons — one press, one comfortable notch. */
+const ZOOM_STEP = 1.6;
 /** Neighbours listed in the sidebar; the highlight still covers all of them. */
 const NEIGHBOR_LIST_LIMIT = 100;
+
+/**
+ * Phone-shaped viewport. Above it the explore panel is a docked sidebar; below
+ * it the canvas takes the whole body and the panel becomes a bottom sheet, so
+ * a 17rem sidebar cannot eat two thirds of a 390 px screen. Mirrored by the
+ * `@media (max-width: 48rem)` block in app.css — change both together.
+ */
+const NARROW_QUERY = '(max-width: 48rem)';
+
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW_QUERY);
+    const onChange = () => setNarrow(mq.matches);
+    setNarrow(mq.matches); // a rotation between render and effect
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return narrow;
+}
 
 function seededScatter(n: number, seed: number): Float32Array {
   const rand = mulberry32(seed);
@@ -82,6 +108,8 @@ interface RenderStats {
   drawnEdges: number;
   /** Share of the graph inside the viewport; 1 until the pick index exists. */
   visibleFraction: number;
+  /** Device pixels per world unit — the camera's zoom, for gesture tests. */
+  zoom: number;
   /**
    * Share of the viewport the graph's on-screen box covers; 1 at and above the
    * fit view, falling as you zoom out past it. Distinct from `visibleFraction`,
@@ -162,11 +190,17 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
   const [neighborhood, setNeighborhood] = useState<Neighborhood | null>(null);
   const [query, setQuery] = useState('');
 
+  const narrow = useNarrow();
+  /** Bottom-sheet state; meaningless while the panel is docked (wide screen). */
+  const [panelOpen, setPanelOpen] = useState(false);
+
   /** Imperative handle into the render effect, for sidebar-driven selection. */
   const viewApi = useRef<{
     select: (node: number) => void;
     focus: (node: number) => void;
     setStyle: (style: Uint32Array | null) => void;
+    zoomBy: (factor: number) => void;
+    resetView: () => void;
   } | null>(null);
 
   // Attribute styling and the attribute card. The style buffer is kept here
@@ -237,6 +271,7 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
       drawnNodes: graph.nodeCount,
       drawnEdges: graph.edgeCount,
       visibleFraction: 1,
+      zoom: 1,
       coverage: 1,
     };
     window.__skeinRender = stats;
@@ -299,6 +334,8 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
        * before that the budget falls back to those fixed caps.
        */
       let layoutSpan: { x: number; y: number; fitZoom: number } | null = null;
+      /** The settled layout's bounding box, so "fit" can go back to it. */
+      let fitBox: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
       let hoverNode = -1;
       let selectedNode = -1;
 
@@ -374,24 +411,46 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         camera.centerX = x;
         camera.centerY = y;
       };
+      /** Zoom about the middle of the canvas — what a button press means. */
+      const zoomBy = (factor: number) =>
+        camera.zoomAt(factor, canvas.width / 2, canvas.height / 2);
+      /** Back to the framing `finishWith` chose, or the world square before it. */
+      const resetView = () => {
+        if (fitBox) camera.fit(fitBox.minX, fitBox.minY, fitBox.maxX, fitBox.maxY, 1.15);
+        else camera.fit(0, 0, WORLD_SIZE, WORLD_SIZE);
+      };
       viewApi.current = {
         select,
         focus,
         setStyle: (style) => renderer?.setNodeStyle(style),
+        zoomBy,
+        resetView,
       };
       // Re-apply whatever the attributes panel had set: this effect re-runs on
       // a seed change with a brand-new renderer, whose style buffer is empty.
       renderer.setNodeStyle(styleRef.current);
 
       // ---- Pointer: pan/zoom plus pick-on-move and select-on-click.
+      //
+      // Two-finger pinch is the only way to zoom on a touch screen — there is
+      // no wheel — so pointers are tracked as a set rather than one drag:
+      // every live contact is in `pointers`, and the gesture is whatever its
+      // size says it is. Touch also has no hover, so a tap has to do the work
+      // a mouse splits between moving and clicking, with a fingertip's slack
+      // in both the hit radius and the click threshold.
+      const pointers = new Map<number, { x: number; y: number }>();
       let dragging = false;
       let lastX = 0;
       let lastY = 0;
       let downX = 0;
       let downY = 0;
       let travel = 0;
+      /** Live pinch state, in CSS pixels: finger separation and midpoint. */
+      let pinchDist = 0;
+      let pinchX = 0;
+      let pinchY = 0;
 
-      const pickAt = (clientX: number, clientY: number): number => {
+      const pickAt = (clientX: number, clientY: number, radiusPx: number): number => {
         if (!pickIndex || !livePositions) return -1;
         const rect = canvas.getBoundingClientRect();
         const { x, y } = camera.worldAt((clientX - rect.left) * dpr, (clientY - rect.top) * dpr);
@@ -401,21 +460,62 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
           livePositions,
           x,
           y,
-          PICK_RADIUS_PX * dpr * camera.worldPerPixel(),
+          radiusPx * dpr * camera.worldPerPixel(),
         );
         stats.pickMs = performance.now() - t0;
         return node;
       };
+      const touchy = (e: PointerEvent) => e.pointerType !== 'mouse';
+      const pickRadius = (e: PointerEvent) => (touchy(e) ? TOUCH_PICK_RADIUS_PX : PICK_RADIUS_PX);
+
+      /** Re-read the two contacts; called on every pinch frame and at its start. */
+      const measurePinch = () => {
+        const [a, b] = [...pointers.values()];
+        pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+        pinchX = (a.x + b.x) / 2;
+        pinchY = (a.y + b.y) / 2;
+      };
 
       const onPointerDown = (e: PointerEvent) => {
-        if (e.button !== 0) return; // right/middle click must not select
-        dragging = true;
-        travel = 0;
-        lastX = downX = e.clientX;
-        lastY = downY = e.clientY;
+        if (e.pointerType === 'mouse' && e.button !== 0) return; // right/middle must not select
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         canvas.setPointerCapture(e.pointerId);
+        if (pointers.size === 1) {
+          dragging = true;
+          travel = 0;
+          lastX = downX = e.clientX;
+          lastY = downY = e.clientY;
+          return;
+        }
+        // A second finger turns the gesture into a pinch. The pan it grew out
+        // of ends here, and `travel` is poisoned so the release cannot be
+        // mistaken for a tap on whatever is under the last finger up.
+        dragging = false;
+        travel = Infinity;
+        if (pointers.size === 2) measurePinch();
       };
       const onPointerMove = (e: PointerEvent) => {
+        const tracked = pointers.get(e.pointerId);
+        if (tracked) {
+          tracked.x = e.clientX;
+          tracked.y = e.clientY;
+        }
+        if (pointers.size >= 2) {
+          // Pinch: the midpoint pans and the separation zooms, both anchored
+          // at the midpoint so the world stays put under the fingers.
+          const before = { d: pinchDist, x: pinchX, y: pinchY };
+          measurePinch();
+          const rect = canvas.getBoundingClientRect();
+          camera.panBy((pinchX - before.x) * dpr, (pinchY - before.y) * dpr);
+          if (before.d > 0 && pinchDist > 0) {
+            camera.zoomAt(
+              pinchDist / before.d,
+              (pinchX - rect.left) * dpr,
+              (pinchY - rect.top) * dpr,
+            );
+          }
+          return;
+        }
         if (dragging) {
           camera.panBy((e.clientX - lastX) * dpr, (e.clientY - lastY) * dpr);
           lastX = e.clientX;
@@ -423,7 +523,8 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
           travel = Math.max(travel, Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY));
           return;
         }
-        const node = pickAt(e.clientX, e.clientY);
+        if (touchy(e)) return; // no hover without a cursor to hover with
+        const node = pickAt(e.clientX, e.clientY, pickRadius(e));
         if (node === hoverNode) return;
         hoverNode = node;
         uploadOverlay();
@@ -431,17 +532,37 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         canvas.style.cursor = node >= 0 ? 'pointer' : 'default';
       };
       const onPointerUp = (e: PointerEvent) => {
+        const wasPinching = pointers.size >= 2;
+        pointers.delete(e.pointerId);
+        if (wasPinching) {
+          // Whatever is left has to be re-seated before the next move, or the
+          // camera jumps by the gap between the finger that went and the ones
+          // that stayed: a pan from the surviving contact, or — with three
+          // fingers down — a pinch measured on the new leading pair.
+          const rest = [...pointers.values()];
+          if (rest.length >= 2) measurePinch();
+          else if (rest.length === 1) {
+            dragging = true;
+            lastX = downX = rest[0].x;
+            lastY = downY = rest[0].y;
+            travel = Infinity; // a pinch never ends in a selection
+          }
+          return;
+        }
         // Only a gesture that began on the canvas selects: releasing here
         // after a press that started in the sidebar is not a click on a node.
         if (!dragging) return;
         dragging = false;
-        if (travel > CLICK_SLOP_PX) return;
-        select(pickAt(e.clientX, e.clientY));
+        const slop = touchy(e) ? TOUCH_CLICK_SLOP_PX : CLICK_SLOP_PX;
+        if (travel > slop) return;
+        select(pickAt(e.clientX, e.clientY, pickRadius(e)));
       };
       // Without this, a UA-cancelled gesture leaves `dragging` latched: the
       // camera then pans with no button held and, worse, pointermove never
       // reaches the pick branch again — hover and selection die for good.
-      const onPointerCancel = () => {
+      const onPointerCancel = (e: PointerEvent) => {
+        pointers.delete(e.pointerId);
+        if (pointers.size >= 2) measurePinch();
         dragging = false;
       };
       const onPointerLeave = () => {
@@ -524,6 +645,7 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
       const frame = () => {
         if (disposed) return;
         const view = camera.view(2.5 * dpr);
+        stats.zoom = camera.zoom;
         renderer!.render(view, drawLimits(view));
         stats.frames++;
         windowFrames++;
@@ -617,6 +739,7 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         if (minX < maxX && minY < maxY) {
           camera.fit(minX, minY, maxX, maxY, 1.15);
           layoutSpan = { x: maxX - minX, y: maxY - minY, fitZoom: camera.zoom };
+          fitBox = { minX, minY, maxX, maxY };
         }
         // Explore is live from here: hit-testing needs settled coordinates.
         livePositions = positions;
@@ -705,42 +828,57 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
     if (node >= 0) viewApi.current?.focus(node);
   }, []);
 
+  // On a phone the panel is a sheet over the canvas, so a tap that selects a
+  // node has to raise it — otherwise the tap's whole result is off-screen.
+  useEffect(() => {
+    if (narrow && selected) setPanelOpen(true);
+  }, [narrow, selected]);
+
   return (
-    <div className="graph-view" data-testid="graph-view">
+    <div
+      className="graph-view"
+      data-testid="graph-view"
+      data-panel={narrow ? (panelOpen ? 'open' : 'closed') : 'docked'}
+    >
       <div className="graph-hud">
-        <span>
+        <span className="hud-title">
           <strong>{name}</strong> — {graph.nodeCount.toLocaleString()} nodes,{' '}
           {graph.edgeCount.toLocaleString()} edges
+        </span>
+        {/* Everything that is a reading or a knob, kept together so a narrow
+            screen can drop the lot onto its own row under the title. */}
+        <span className="hud-stats">
           {drawn && (drawn.edges < graph.edgeCount || drawn.nodes < graph.nodeCount) && (
             <span data-testid="draw-sample">
-              {' '}
-              (drawing a seeded sample: {drawn.edges.toLocaleString()} edges,{' '}
-              {drawn.nodes.toLocaleString()} nodes — zoom in for more)
+              seeded sample: {drawn.edges.toLocaleString()} edges,{' '}
+              {drawn.nodes.toLocaleString()} nodes — zoom in for more
             </span>
           )}
+          <span data-testid="render-backend">renderer: {backend}</span>
+          <span data-testid="layout-status">layout: {layoutState}</span>
+          <label>
+            seed{' '}
+            <input
+              className="seed-input"
+              value={seedInput}
+              onChange={(e) => setSeedInput(e.target.value)}
+              size={6}
+              aria-label="layout seed"
+            />
+          </label>
+          <button
+            onClick={() => {
+              const s = Number(seedInput);
+              if (Number.isFinite(s)) setSeed(s >>> 0);
+            }}
+          >
+            re-layout
+          </button>
+          <span data-testid="render-fps">{fps} fps</span>
         </span>
-        <span data-testid="render-backend">renderer: {backend}</span>
-        <span data-testid="layout-status">layout: {layoutState}</span>
-        <label>
-          seed{' '}
-          <input
-            className="seed-input"
-            value={seedInput}
-            onChange={(e) => setSeedInput(e.target.value)}
-            size={6}
-            aria-label="layout seed"
-          />
-        </label>
-        <button
-          onClick={() => {
-            const s = Number(seedInput);
-            if (Number.isFinite(s)) setSeed(s >>> 0);
-          }}
-        >
-          re-layout
+        <button className="hud-close" onClick={onClose}>
+          close
         </button>
-        <span data-testid="render-fps">{fps} fps</span>
-        <button onClick={onClose}>close</button>
       </div>
       {error ? (
         <p className="summary error" role="alert">
@@ -748,9 +886,48 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         </p>
       ) : (
         <div className="graph-body">
-          <canvas ref={canvasRef} aria-label="graph canvas" />
+          <div className="canvas-wrap">
+            <canvas ref={canvasRef} aria-label="graph canvas" />
+            {/* Touch has no wheel: pinch is implemented, but a one-thumb
+                control that cannot be mistaken for a pan is what makes zoom
+                discoverable. Useful with a mouse too. */}
+            <div className="canvas-controls" data-testid="view-controls">
+              <button
+                aria-label="zoom in"
+                title="zoom in"
+                onClick={() => viewApi.current?.zoomBy(ZOOM_STEP)}
+              >
+                +
+              </button>
+              <button
+                aria-label="zoom out"
+                title="zoom out"
+                onClick={() => viewApi.current?.zoomBy(1 / ZOOM_STEP)}
+              >
+                −
+              </button>
+              <button
+                aria-label="fit graph to view"
+                title="fit graph to view"
+                onClick={() => viewApi.current?.resetView()}
+              >
+                ⤢
+              </button>
+            </div>
+          </div>
 
           <aside className="explore" aria-label="explore panel">
+            {narrow && (
+              <button
+                className="sheet-handle"
+                data-testid="explore-toggle"
+                aria-expanded={panelOpen}
+                onClick={() => setPanelOpen((open) => !open)}
+              >
+                <span className="grip" aria-hidden="true" />
+                {panelOpen ? 'hide panel' : selected ? selected.id : 'search, colour, filter'}
+              </button>
+            )}
             <label className="search">
               <span className="muted">find a node</span>
               <input
