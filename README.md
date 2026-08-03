@@ -1,4 +1,4 @@
-# skein
+# ![skein](docs/logo-wordmark.svg)
 
 A fully client-side, open source viewer for large network graphs. Upload an
 edge list, get an interactive force-directed layout. Your data never leaves
@@ -16,8 +16,9 @@ multilevel layout, and the explore surface — hover, selection, 1-hop
 neighbourhoods, id search, and attribute-driven colour, size and filters — all
 land at the 1M-node / 10M-edge tier, and the app ships as a single binary. M5
 (compatibility matrix, docs, static deploy) is what is left. See
-[REQUIREMENTS.md](REQUIREMENTS.md) for the full brief and
-[docs/DECISIONS.md](docs/DECISIONS.md) for resolved design questions.
+[REQUIREMENTS.md](REQUIREMENTS.md) for the full brief,
+[docs/DECISIONS.md](docs/DECISIONS.md) for resolved design questions, and
+[docs/BRAND.md](docs/BRAND.md) for the mark above.
 
 ## Install
 
@@ -174,6 +175,7 @@ crates/skein-wasm/   wasm-bindgen boundary (thin; algorithms stay in core)
 crates/skein-cli/    the `skein` binary: embeds web/dist and serves it
 crates/skein-native/ macOS-only second front end: winit + wgpu, no browser (D15),
                      and the out-of-core tier for graphs past the wasm cap (D16)
+tools/logo.mjs       generates docs/logo*.svg and the inlined favicon (docs/BRAND.md)
 web/src/workers/     ingest worker: File.stream() → WASM → CSR + OPFS
 web/src/render/      WebGPU renderer with a WebGL2 fallback, shared flat buffers
 web/src/layout/      multilevel force sim: WGSL compute, plus a CPU reference

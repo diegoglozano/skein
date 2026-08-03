@@ -276,6 +276,8 @@ cargo test --workspace           # core tests
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
 npm run fixtures                 # tiny + small fixtures, edges + {name}-nodes.csv
                                  # attributes (gitignored, required for tests)
+npm run logo                     # regenerate docs/logo*.svg and the inlined
+                                 # favicon in web/index.html (docs/BRAND.md)
 npm run dev                      # app :5173, spike at /spike.html?fixture=tiny
 npm run build -w web             # typecheck + production build (CSP injected here only)
 npm run test -w tests            # privacy gate + app suite (needs fixtures + built web)

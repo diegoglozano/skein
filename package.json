@@ -10,6 +10,7 @@
     "build": "npm run build:wasm && npm run build -w web",
     "build:wasm": "wasm-pack build crates/skein-wasm --target web --out-dir ../../web/src/wasm-pkg --no-pack",
     "fixtures": "node bench/generate-fixtures.mjs",
+    "logo": "node tools/logo.mjs",
     "test:e2e": "npm run test -w tests"
   }
 }
