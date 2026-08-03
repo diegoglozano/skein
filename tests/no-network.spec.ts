@@ -63,9 +63,26 @@ test('app makes no off-origin requests', async ({ page, baseURL }) => {
   // neighbourhood query.
   await page.getByTestId('node-search').fill('n9999');
   await page.getByTestId('search-hit').first().click();
-  await expect(page.getByTestId('selection-card')).toContainText('neighbours', {
+  await expect(page.getByTestId('selection-card')).toContainText('within 1 hop', {
     timeout: 15_000,
   });
+  await page.getByTestId('hop-3').click();
+  await expect(page.getByTestId('selection-card')).toContainText('within 3 hops', {
+    timeout: 30_000,
+  });
+  await page.getByTestId('isolate-toggle').check();
+  await page.getByTestId('selection-card').getByRole('button', { name: 'clear selection' }).click();
+
+  // And through the export path (§10), which is the one place the app hands
+  // data *out*: a download that went anywhere but a blob URL — even to a
+  // formatting service — would be the graph leaving the tab.
+  for (const control of ['export-png', 'export-positions']) {
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId(control).click(),
+    ]);
+    expect(await download.path()).toBeTruthy();
+  }
 
   // And through the M4 attributes path. This is the reason the test exists at
   // all for DuckDB: `getJsDelivrBundles()` is what every duckdb-wasm example

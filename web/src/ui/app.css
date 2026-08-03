@@ -283,6 +283,14 @@ h1 {
   width: 5.5rem;
 }
 
+/* Export (§10). Sits with the other HUD readings so it wraps onto the narrow
+   layout's second row with them. */
+.graph-hud .hud-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
 .graph-body {
   flex: 1;
   display: flex;

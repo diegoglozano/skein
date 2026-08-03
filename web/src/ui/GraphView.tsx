@@ -34,6 +34,7 @@ import {
 import { nodeId, searchNodes, type SearchHit } from '../interact/search';
 import type { AttributeStore } from '../analytics/attributes';
 import { AttributesPanel } from './AttributesPanel';
+import { download, exportStem, positionsCsv } from './export';
 import type {
   FromWorker,
   HierarchyLevelBuffers,
@@ -254,6 +255,10 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
     setStyle: (style: Uint32Array | null) => void;
     zoomBy: (factor: number) => void;
     resetView: () => void;
+    /** The frame as a PNG, captured inside the frame that drew it. */
+    capture: () => Promise<Blob | null>;
+    /** Settled layout coordinates, or null while one is still being computed. */
+    positions: () => Float32Array | null;
   } | null>(null);
 
   // Attribute styling and the attribute card. The style buffer is kept here
@@ -535,12 +540,28 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         if (fitBox) camera.fit(fitBox.minX, fitBox.minY, fitBox.maxX, fitBox.maxY, 1.15);
         else camera.fit(0, 0, WORLD_SIZE, WORLD_SIZE);
       };
+      /**
+       * PNG export. Neither backend preserves its drawing buffer — that costs
+       * a copy on every frame to serve an action taken once — so the capture
+       * has to happen in the same task as a `render`, before the compositor
+       * takes the buffer back. The frame loop below does it right after
+       * submitting; `preserveDrawingBuffer` would be the alternative and it
+       * would make every frame pay for this button.
+       */
+      let captureRequest: ((blob: Blob | null) => void) | null = null;
+      const capture = () =>
+        new Promise<Blob | null>((resolve) => {
+          captureRequest = resolve;
+        });
+
       viewApi.current = {
         select,
         focus,
         setStyle: (style) => renderer?.setNodeStyle(style),
         zoomBy,
         resetView,
+        capture,
+        positions: () => livePositions,
       };
       // Re-apply whatever the attributes panel had set: this effect re-runs on
       // a seed change with a brand-new renderer, whose style buffer is empty.
@@ -867,6 +888,13 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         const view = camera.view(2.5 * dpr);
         stats.zoom = camera.zoom;
         renderer!.render(view, drawLimits(view));
+        if (captureRequest) {
+          const resolve = captureRequest;
+          captureRequest = null;
+          // Synchronous with respect to the buffer: toBlob snapshots the
+          // canvas at call time and only the encoding is deferred.
+          canvas.toBlob((blob) => resolve(blob), 'image/png');
+        }
         stats.frames++;
         windowFrames++;
         const now = performance.now();
@@ -1057,6 +1085,37 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
     };
   }, [selected, storeVersion]);
 
+  /** Which export is mid-flight, for the button's own feedback. A million-row
+   * CSV takes long enough that a silent button reads as a broken one. */
+  const [exporting, setExporting] = useState<'png' | 'csv' | null>(null);
+
+  const exportPng = useCallback(async () => {
+    setExporting('png');
+    try {
+      const blob = await viewApi.current?.capture();
+      if (blob) download(blob, `${exportStem(name, seed)}.png`);
+    } finally {
+      setExporting(null);
+    }
+  }, [name, seed]);
+
+  const exportPositions = useCallback(async () => {
+    const positions = viewApi.current?.positions();
+    if (!positions) return;
+    setExporting('csv');
+    // Yield once so the disabled state paints before the main thread goes away
+    // for a second or two building the rows.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    try {
+      download(
+        positionsCsv(graph.idBytes, graph.idOffsets, positions),
+        `${exportStem(name, seed)}-positions.csv`,
+      );
+    } finally {
+      setExporting(null);
+    }
+  }, [graph, name, seed]);
+
   const pick = useCallback((node: number) => {
     viewApi.current?.select(node, hopsRef.current);
     if (node >= 0) viewApi.current?.focus(node);
@@ -1109,6 +1168,27 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
             re-layout
           </button>
           <span data-testid="render-fps">{fps} fps</span>
+          {/* Built in the tab and handed over as a blob — the §7 guarantee
+              covers getting results *out* as much as getting them in. */}
+          <span className="hud-export">
+            export
+            <button
+              onClick={() => void exportPng()}
+              disabled={exporting !== null}
+              title="the current view, as a PNG"
+              data-testid="export-png"
+            >
+              {exporting === 'png' ? '…' : 'PNG'}
+            </button>
+            <button
+              onClick={() => void exportPositions()}
+              disabled={exporting !== null}
+              title="every node's laid-out coordinates, as CSV"
+              data-testid="export-positions"
+            >
+              {exporting === 'csv' ? '…' : 'coords'}
+            </button>
+          </span>
         </span>
         <button className="hud-close" onClick={onClose}>
           close
