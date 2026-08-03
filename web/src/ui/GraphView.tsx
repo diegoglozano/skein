@@ -24,7 +24,13 @@ import {
 } from '../render';
 import { multilevelLayout } from '../layout/multilevel';
 import { WORLD_SIZE, mulberry32, type LayoutProgress } from '../layout/params';
-import { buildPickIndex, pickNode, visibleNodeCount, type PickIndex } from '../interact/pick';
+import {
+  buildPickIndex,
+  nodesInRect,
+  pickNode,
+  visibleNodeCount,
+  type PickIndex,
+} from '../interact/pick';
 import { nodeId, searchNodes, type SearchHit } from '../interact/search';
 import type { AttributeStore } from '../analytics/attributes';
 import { AttributesPanel } from './AttributesPanel';
@@ -56,6 +62,15 @@ const NEIGHBOR_LIST_LIMIT = 100;
  * paying seconds to select everything.
  */
 const MAX_HOPS = 5;
+/**
+ * Nodes a box select will *name*. The mask it isolates against covers the
+ * whole rectangle regardless — this only bounds the array the overlay draws
+ * and the ids the panel decodes, both of which stop being useful long before
+ * a drag across a million-node hairball finishes.
+ */
+const MAX_BOX_SELECTION = 50_000;
+/** A drag shorter than this (CSS px) is a click that missed, not a box. */
+const MIN_BOX_PX = 6;
 
 /**
  * Phone-shaped viewport. Above it the explore panel is a docked sidebar; below
@@ -176,6 +191,12 @@ interface Neighborhood {
   listed: NodeRef[];
 }
 
+/** A rectangle's worth of nodes (§10 box select). */
+interface BoxSelection {
+  total: number;
+  listed: NodeRef[];
+}
+
 export function GraphView({ graph, name, worker, attached, onClose }: {
   graph: LoadedGraph;
   name: string;
@@ -185,6 +206,9 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
   onClose: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  /** The rubber band, moved imperatively: it tracks the pointer, and routing
+   * that through React state would re-render the panel on every move. */
+  const bandRef = useRef<HTMLDivElement>(null);
   const [backend, setBackend] = useState<string>('starting…');
   const [fps, setFps] = useState(0);
   /** Last sampled draw budget (D13); null until the first fps tick. */
@@ -206,8 +230,18 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
    */
   const [hops, setHops] = useState(1);
   const hopsRef = useRef(1);
-  /** Hide everything outside that neighbourhood (§10 "isolate subgraph"). */
+  /** Hide everything outside the current selection (§10 "isolate subgraph"). */
   const [isolated, setIsolated] = useState(false);
+  const [boxSelection, setBoxSelection] = useState<BoxSelection | null>(null);
+  /**
+   * Whether a one-pointer drag draws a selection box instead of panning. A
+   * mode rather than only a modifier because touch has no shift key, and this
+   * is the one interaction on the canvas with nothing to fall back to (D18
+   * made the same argument for the zoom buttons). Shift still works with a
+   * mouse and needs no mode.
+   */
+  const [boxMode, setBoxMode] = useState(false);
+  const boxModeRef = useRef(false);
 
   const narrow = useNarrow();
   /** Bottom-sheet state; meaningless while the panel is docked (wide screen). */
@@ -413,7 +447,7 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
        * overlay draws the edges the walk actually used — a star from the seed
        * would draw lines that are not edges of the graph.
        */
-      const setSelectionOverlay = (neighbors: Uint32Array, parents: Uint32Array) => {
+      const setSelectionOverlay = (neighbors: Uint32Array, parents: Uint32Array | null) => {
         const k = neighbors.length;
         const base = selectedNode >= 0 ? 1 : 0;
         // +1 for the hover slot at the tail.
@@ -422,8 +456,12 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         overlayNodes.set(neighbors, base);
         overlayFixed = base + k;
 
-        overlayEdges = new Uint32Array(2 * k);
-        for (let i = 0; i < k; i++) {
+        // `parents` null means highlight the nodes and nothing joining them —
+        // what a box select wants, since the edges induced by a rectangle are
+        // not in hand and joining its members to each other would be a claim
+        // about adjacency nobody made.
+        overlayEdges = new Uint32Array(parents ? 2 * k : 0);
+        for (let i = 0; parents && i < k; i++) {
           overlayEdges[2 * i] = parents[i];
           overlayEdges[2 * i + 1] = neighbors[i];
         }
@@ -431,12 +469,22 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
       };
 
       const empty = new Uint32Array(0);
+      /** Set while the highlight belongs to a box rather than to a node. */
+      let boxActive = false;
 
       const select = (node: number, hopCount: number) => {
+        // Isolating is a property of the current selection, not a mode: it
+        // survives changing the depth on the same seed (the same subgraph,
+        // drawn wider) and is released by selecting something else. Sticky
+        // would mean a click on a neighbour instantly hides almost everything,
+        // which reads as the graph disappearing rather than as a setting.
+        if (boxActive || node !== selectedNode || node < 0) setIsolate(false);
+        boxActive = false;
         selectedNode = node;
         setSelectionOverlay(empty, empty);
         setSelected(node >= 0 ? describe(node) : null);
         setNeighborhood(null);
+        setBoxSelection(null);
         // The old mask describes a neighbourhood that no longer exists. Drop
         // it before the reply lands, or an isolated view keeps hiding against
         // the previous selection while the panel already shows the new one.
@@ -449,10 +497,6 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
             node,
             hops: hopCount,
           } satisfies ToWorker);
-        } else {
-          // Nothing is selected, so there is no subgraph to isolate; leaving
-          // it on would hide the whole graph with no way to see that is why.
-          setIsolate(false);
         }
       };
 
@@ -543,6 +587,79 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
       const touchy = (e: PointerEvent) => e.pointerType !== 'mouse';
       const pickRadius = (e: PointerEvent) => (touchy(e) ? TOUCH_PICK_RADIUS_PX : PICK_RADIUS_PX);
 
+      // ---- Box select. The band is a plain absolutely-positioned div over the
+      // canvas rather than a renderer pass: it is one rectangle at pointer
+      // rate, and putting it in the render path would mean a buffer upload and
+      // a pipeline for something the compositor already draws for free.
+      let boxing = false;
+      let boxX0 = 0;
+      let boxY0 = 0;
+
+      const bandBox = (x1: number, y1: number) => {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          left: Math.min(boxX0, x1) - rect.left,
+          top: Math.min(boxY0, y1) - rect.top,
+          width: Math.abs(x1 - boxX0),
+          height: Math.abs(y1 - boxY0),
+        };
+      };
+
+      const drawBand = (x1: number, y1: number) => {
+        const band = bandRef.current;
+        if (!band) return;
+        const { left, top, width, height } = bandBox(x1, y1);
+        band.style.display = 'block';
+        band.style.left = `${left}px`;
+        band.style.top = `${top}px`;
+        band.style.width = `${width}px`;
+        band.style.height = `${height}px`;
+      };
+
+      const hideBand = () => {
+        boxing = false;
+        if (bandRef.current) bandRef.current.style.display = 'none';
+      };
+
+      const finishBox = (x1: number, y1: number) => {
+        hideBand();
+        if (!pickIndex || !livePositions) return;
+        const rect = canvas.getBoundingClientRect();
+        const a = camera.worldAt((boxX0 - rect.left) * dpr, (boxY0 - rect.top) * dpr);
+        const b = camera.worldAt((x1 - rect.left) * dpr, (y1 - rect.top) * dpr);
+        const t0 = performance.now();
+        const found = nodesInRect(
+          pickIndex,
+          livePositions,
+          Math.min(a.x, b.x),
+          Math.min(a.y, b.y),
+          Math.max(a.x, b.x),
+          Math.max(a.y, b.y),
+          MAX_BOX_SELECTION,
+        );
+        // Shares `pickMs`: both are the same question of the same index, and a
+        // second HUD reading for the rarer one would be noise.
+        stats.pickMs = performance.now() - t0;
+
+        // A box replaces whatever single node was selected — one highlight, so
+        // one selection — and, being a different selection, releases whatever
+        // the last one was isolating.
+        setIsolate(false);
+        selectedNode = -1;
+        boxActive = true;
+        setSelected(null);
+        setNeighborhood(null);
+        setSelectionOverlay(found.nodes, null);
+        maskRef.current = found.mask;
+        pushStyle();
+
+        const listed: NodeRef[] = [];
+        for (let i = 0; i < Math.min(found.nodes.length, NEIGHBOR_LIST_LIMIT); i++) {
+          listed.push(describe(found.nodes[i]));
+        }
+        setBoxSelection({ total: found.total, listed });
+      };
+
       /** Re-read the two contacts; called on every pinch frame and at its start. */
       const measurePinch = () => {
         const [a, b] = [...pointers.values()];
@@ -560,12 +677,20 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
           travel = 0;
           lastX = downX = e.clientX;
           lastY = downY = e.clientY;
+          // Box select takes the drag; panning is still available through the
+          // mode toggle, and shift is a mouse-only shortcut into it.
+          if (boxModeRef.current || e.shiftKey) {
+            boxing = true;
+            boxX0 = e.clientX;
+            boxY0 = e.clientY;
+          }
           return;
         }
-        // A second finger turns the gesture into a pinch. The pan it grew out
-        // of ends here, and `travel` is poisoned so the release cannot be
-        // mistaken for a tap on whatever is under the last finger up.
+        // A second finger turns the gesture into a pinch. The pan (or box) it
+        // grew out of ends here, and `travel` is poisoned so the release
+        // cannot be mistaken for a tap on whatever is under the last finger up.
         dragging = false;
+        hideBand();
         travel = Infinity;
         if (pointers.size === 2) measurePinch();
       };
@@ -589,6 +714,11 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
               (pinchY - rect.top) * dpr,
             );
           }
+          return;
+        }
+        if (boxing) {
+          travel = Math.max(travel, Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY));
+          drawBand(e.clientX, e.clientY);
           return;
         }
         if (dragging) {
@@ -629,6 +759,20 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         if (!dragging) return;
         dragging = false;
         const slop = touchy(e) ? TOUCH_CLICK_SLOP_PX : CLICK_SLOP_PX;
+        if (boxing) {
+          // A press that never moved is a click that happened to be in box
+          // mode, not a zero-area rectangle selecting nothing.
+          const dragged = Math.max(
+            Math.abs(e.clientX - boxX0),
+            Math.abs(e.clientY - boxY0),
+          );
+          if (dragged >= MIN_BOX_PX) finishBox(e.clientX, e.clientY);
+          else {
+            hideBand();
+            select(pickAt(e.clientX, e.clientY, pickRadius(e)), hopsRef.current);
+          }
+          return;
+        }
         if (travel > slop) return;
         select(pickAt(e.clientX, e.clientY, pickRadius(e)), hopsRef.current);
       };
@@ -639,6 +783,7 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         pointers.delete(e.pointerId);
         if (pointers.size >= 2) measurePinch();
         dragging = false;
+        hideBand();
       };
       const onPointerLeave = () => {
         if (hoverNode < 0) return;
@@ -873,6 +1018,7 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
     setHover(null);
     setSelected(null);
     setNeighborhood(null);
+    setBoxSelection(null);
     maskRef.current = null;
     setIsolate(false);
   }, [seed, setIsolate]);
@@ -974,12 +1120,26 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         </p>
       ) : (
         <div className="graph-body">
-          <div className="canvas-wrap">
+          <div className={`canvas-wrap${boxMode ? ' boxing' : ''}`}>
             <canvas ref={canvasRef} aria-label="graph canvas" />
+            <div className="select-band" ref={bandRef} aria-hidden="true" />
             {/* Touch has no wheel: pinch is implemented, but a one-thumb
                 control that cannot be mistaken for a pan is what makes zoom
                 discoverable. Useful with a mouse too. */}
             <div className="canvas-controls" data-testid="view-controls">
+              <button
+                aria-label="box select"
+                aria-pressed={boxMode}
+                title="box select (or hold shift and drag)"
+                data-testid="box-select-toggle"
+                className={boxMode ? 'active' : undefined}
+                onClick={() => {
+                  boxModeRef.current = !boxMode;
+                  setBoxMode(!boxMode);
+                }}
+              >
+                ▭
+              </button>
               <button
                 aria-label="zoom in"
                 title="zoom in"
@@ -1049,10 +1209,48 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
               </div>
             )}
 
-            {hover && !selected && (
+            {hover && !selected && !boxSelection && (
               <div className="node-card" data-testid="hover-card">
                 <h3>{hover.id}</h3>
                 <p className="muted">degree {hover.degree.toLocaleString()}</p>
+              </div>
+            )}
+
+            {boxSelection && (
+              <div className="node-card selected" data-testid="box-card">
+                <h3>{boxSelection.total.toLocaleString()} nodes selected</h3>
+                {boxSelection.total === 0 ? (
+                  <p className="muted">that rectangle is empty — drag another</p>
+                ) : (
+                  <>
+                    <div className="hop-controls">
+                      <label className="isolate">
+                        <input
+                          type="checkbox"
+                          checked={isolated}
+                          data-testid="box-isolate-toggle"
+                          onChange={(e) => setIsolate(e.target.checked)}
+                        />
+                        isolate
+                      </label>
+                    </div>
+                    <ul className="neighbors" data-testid="box-list">
+                      {boxSelection.listed.map((n) => (
+                        <li key={n.node}>
+                          <button onClick={() => pick(n.node)}>{n.id}</button>
+                          <em className="muted">{n.degree}</em>
+                        </li>
+                      ))}
+                    </ul>
+                    {boxSelection.total > boxSelection.listed.length && (
+                      <p className="muted">
+                        listing {boxSelection.listed.length} of{' '}
+                        {boxSelection.total.toLocaleString()}
+                      </p>
+                    )}
+                  </>
+                )}
+                <button onClick={() => pick(-1)}>clear selection</button>
               </div>
             )}
 
@@ -1126,11 +1324,12 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
               </dl>
             )}
 
-            {!selected && !hover && !search && (
+            {!selected && !hover && !search && !boxSelection && (
               <p className="muted hint">
                 Hover a node for its id and degree, click to select it and highlight its
                 neighbours. From there, expand the walk to 5 hops and isolate what it
-                reaches. Picking wakes up once the layout settles.
+                reaches. Shift-drag — or the ▭ button — selects a whole rectangle.
+                Picking wakes up once the layout settles.
               </p>
             )}
 

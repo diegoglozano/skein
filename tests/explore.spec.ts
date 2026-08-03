@@ -173,6 +173,70 @@ test.describe('explore on a laid-out graph', () => {
     await card.getByRole('button', { name: 'clear selection' }).click();
   });
 
+  // §10 box select. The ground truth here is the app's own hit-testing rather
+  // than the fixture — a rectangle over laid-out coordinates has no answer the
+  // CSV can give — so the assertions are the ones that hold whatever the
+  // layout did: a box over the whole canvas takes every node, a small one
+  // takes fewer than that but more than none, and the count on the card is
+  // the count the overlay was built from.
+  test('dragging a box selects everything inside it', async () => {
+    const box = (await page.locator('canvas').boundingBox())!;
+    // The tests above leave the camera centred on whatever they selected, so
+    // frame the graph before claiming a full-canvas drag covers all of it.
+    await page.getByLabel('fit graph to view').click();
+    await page.getByTestId('box-select-toggle').click();
+    await expect(page.getByTestId('box-select-toggle')).toHaveAttribute('aria-pressed', 'true');
+
+    // Corner to corner. `finishWith` fits the layout with a 15% margin, so
+    // every node is inside the canvas by a comfortable distance.
+    await page.mouse.move(box.x + 4, box.y + 4);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width - 4, box.y + box.height - 4, { steps: 8 });
+    await page.mouse.up();
+
+    const card = page.getByTestId('box-card');
+    await expect(card.getByRole('heading')).toHaveText('10,000 nodes selected');
+    // The list caps at 100 and says so rather than implying it showed all.
+    await expect(page.getByTestId('box-list').getByRole('button')).toHaveCount(100);
+    await expect(card).toContainText('listing 100 of 10,000');
+
+    // A quarter of the canvas has to be a strict subset — and non-empty, which
+    // is what fails if the screen→world inverse is wrong in a way a full-canvas
+    // drag cannot see (it clamps to the grid at both ends).
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.7, { steps: 8 });
+    await page.mouse.up();
+    const inner = Number(
+      (await card.getByRole('heading').textContent())!.replace(/[^0-9]/g, ''),
+    );
+    expect(inner).toBeGreaterThan(0);
+    expect(inner).toBeLessThan(10_000);
+
+    // Isolating a box uses the same mask path as a neighbourhood.
+    await settle(page);
+    const whole = await canvasPixels(page);
+    await page.getByTestId('box-isolate-toggle').check();
+    await settle(page);
+    expect(
+      whole.equals(await canvasPixels(page)),
+      'isolating a box selection did not change the rendered frame',
+    ).toBe(false);
+
+    // Following a member drops back to single selection, which also releases
+    // the box's isolation — one highlight, so one selection.
+    await page.getByTestId('box-list').getByRole('button').first().click();
+    await expect(page.getByTestId('box-card')).toHaveCount(0);
+    await expect(page.getByTestId('selection-card')).toBeVisible();
+    await expect(page.getByTestId('isolate-toggle')).not.toBeChecked();
+
+    await page.getByTestId('box-select-toggle').click();
+    await page
+      .getByTestId('selection-card')
+      .getByRole('button', { name: 'clear selection' })
+      .click();
+  });
+
   // Last in the group: re-layout replaces the positions the tests above assert
   // against, so it runs once nobody else needs the original picture.
   //

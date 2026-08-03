@@ -337,6 +337,26 @@ h1 {
   border-color: #4c5270;
 }
 
+.canvas-controls button.active {
+  color: #ffb847;
+  border-color: #ffb847;
+}
+
+/* Box select (§10). The band is a plain div over the canvas — one rectangle
+   at pointer rate, which the compositor draws for free. */
+.canvas-wrap.boxing canvas {
+  cursor: crosshair;
+}
+
+.select-band {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  border: 1px solid #ffb847;
+  background: #ffb8471f;
+  border-radius: 2px;
+}
+
 /* Explore panel (M4): search, hover card, selection + neighbours. */
 .explore {
   width: 17rem;
