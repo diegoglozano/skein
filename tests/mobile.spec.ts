@@ -67,6 +67,16 @@ test.afterAll(async () => {
   await page?.context().close();
 });
 
+/**
+ * Top of the sheet, polled. It slides on a 0.2 s CSS transition, so a single
+ * `boundingBox()` taken right after the state that moves it samples the
+ * animation rather than its destination — which passes or fails on how long
+ * the preceding step happened to take.
+ */
+async function sheetTop(): Promise<number> {
+  return (await page.getByLabel('explore panel').boundingBox())!.y;
+}
+
 test('the canvas gets the screen and the explore panel is a sheet', async () => {
   const viewport = page.viewportSize()!;
   const canvas = (await page.locator('canvas').boundingBox())!;
@@ -79,17 +89,15 @@ test('the canvas gets the screen and the explore panel is a sheet', async () => 
   expect(sheet.y).toBeGreaterThan(viewport.height - 64);
 
   await page.getByTestId('explore-toggle').click();
+  await expect.poll(sheetTop).toBeLessThan(viewport.height * 0.55);
   const open = (await page.getByLabel('explore panel').boundingBox())!;
-  expect(open.y).toBeLessThan(viewport.height * 0.55);
   expect(open.width).toBeGreaterThan(viewport.width * 0.95);
   // And the search field inside it is actually on screen now.
   const search = (await page.getByTestId('node-search').boundingBox())!;
   expect(search.y + search.height).toBeLessThan(viewport.height);
 
   await page.getByTestId('explore-toggle').click();
-  expect((await page.getByLabel('explore panel').boundingBox())!.y).toBeGreaterThan(
-    viewport.height - 64,
-  );
+  await expect.poll(sheetTop).toBeGreaterThan(viewport.height - 64);
 });
 
 test('a tap selects a node and raises the sheet', async () => {
@@ -107,18 +115,14 @@ test('a tap selects a node and raises the sheet', async () => {
   await expect(page.getByTestId('selection-card').getByRole('heading')).toHaveText('n9999');
 
   const viewport = page.viewportSize()!;
-  expect((await page.getByLabel('explore panel').boundingBox())!.y).toBeLessThan(
-    viewport.height * 0.55,
-  );
+  await expect.poll(sheetTop).toBeLessThan(viewport.height * 0.55);
 
   // A selection overflows the sheet, and the handle is a flex item in it: if it
   // is allowed to shrink, the only way back to the graph disappears.
   const handle = (await page.getByTestId('explore-toggle').boundingBox())!;
   expect(handle.height).toBeGreaterThan(30);
   await page.getByTestId('explore-toggle').click();
-  expect((await page.getByLabel('explore panel').boundingBox())!.y).toBeGreaterThan(
-    viewport.height - 64,
-  );
+  await expect.poll(sheetTop).toBeGreaterThan(viewport.height - 64);
 });
 
 // Both zoom paths in one test: they assert the same property against the same
