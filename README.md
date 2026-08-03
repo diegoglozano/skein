@@ -11,11 +11,13 @@ Unedited screen capture: a 20k-node / 120k-edge edge list ingested in 31 ms,
 laid out in 1.9 s, and panned and zoomed at 60 fps — on the reference M3
 MacBook Air, WebGPU on Metal. Recorded by `node tests/manual-demo.mjs`.
 
-**Status: M4 done, plus distribution.** Ingest, rendering, deterministic
-multilevel layout, and the explore surface — hover, selection, 1-hop
-neighbourhoods, id search, and attribute-driven colour, size and filters — all
-land at the 1M-node / 10M-edge tier, and the app ships as a single binary. M5
-(compatibility matrix, docs, static deploy) is what is left. See
+**Status: M4 done, plus distribution, plus the rest of §10's UI surface.**
+Ingest, rendering, deterministic multilevel layout, and the explore surface —
+hover, selection, k-hop neighbourhoods, isolate, box select, id search,
+attribute-driven colour, size and filters, column mapping on import and export
+of both the view and the coordinates — all land at the 1M-node / 10M-edge tier,
+and the app ships as a single binary. M5 (compatibility matrix, docs) is what
+is left. See
 [REQUIREMENTS.md](REQUIREMENTS.md) for the full brief and
 [docs/DECISIONS.md](docs/DECISIONS.md) for resolved design questions.
 
@@ -65,15 +67,24 @@ origin, and the origin includes the port, so a different port hides them.
 
 ### What to feed it
 
-Drop a **CSV edge list** on the page (or use the file picker). Today the column
-mapping is fixed: a header row is expected and skipped, the first column is the
-source node, the second is the target. Anything further right is ignored, and
-rows with fewer than two columns are skipped and counted in the summary.
+Drop a **CSV edge list** on the page (or use the file picker). A dialog shows
+the first rows and asks which columns hold the edge, having guessed from the
+file: the delimiter is sniffed, a header row is detected, and columns named
+`source`/`target`/`weight` (or `from`/`to`, `src`/`dst`, …) are picked up by
+name. Change any of it over the preview and import. Rows with fewer than two
+columns are skipped and counted in the summary.
 
 ```csv
 source,target
 alice,bob
 alice,carol
+```
+
+So a file whose edge lives elsewhere works without pre-processing:
+
+```csv
+when;source;target;weight
+2024-01-01;ana;bo;3
 ```
 
 **Nothing to feed it?** Under the drop zone are two fields — a node count and an
@@ -122,10 +133,30 @@ categories can end up as neighbouring pixels, a fourth hue measurably stops
 being distinguishable — including for readers with full colour vision (D14a).
 Filter to compare the rest.
 
-Current limits, all deliberate and all on the roadmap: CSV only (Parquet/Arrow
-and a column-mapping dialog are §10), and the canvas draws a seeded 300k-edge
-sample of larger graphs because edge rendering is fill-bound
-(docs/DECISIONS.md D8) — the HUD says when it is sampling.
+Current limits, all deliberate and all on the roadmap: CSV only (Parquet and
+Arrow are §10), and the canvas draws a seeded 300k-edge sample of larger graphs
+because edge rendering is fill-bound (docs/DECISIONS.md D8) — the HUD says when
+it is sampling.
+
+### Exploring
+
+Click a node for its id, degree, attributes and neighbours. **Expand the walk
+up to five hops**, and **isolate** what it reaches — everything else is hidden,
+edges included, and it composes with whatever the attribute filters already
+hid. **Shift-drag** (or the ▭ button, for a touch screen) selects everything
+inside a rectangle.
+
+Isolating applies to the selection you have, not to a mode you turn on: it
+follows you as you change the depth, and lets go the moment you select
+something else, so the graph always comes back (docs/DECISIONS.md D20).
+
+### Getting results out
+
+**PNG** exports the current view; **coords** exports `id,x,y` for every node as
+CSV — every node, not just what is on screen, because the file is the layout
+rather than the camera. Both are built in this tab and handed straight to the
+browser, which is the same guarantee running in the other direction: the
+no-network test drives both buttons.
 
 ### Self-hosting
 

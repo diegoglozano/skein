@@ -1534,3 +1534,162 @@ rather than adding an eighth cold start), someone proposes an fps-driven or
 viewport-driven speedup (both measured, both buy nothing — see above), or CI
 gains a GPU runner, at which point the styled-frame cost that dominates
 `attributes.spec.ts` disappears and this apportionment is stale.
+
+## D20 — The rest of §10's UI surface: k hops, isolate, box select, export, column mapping
+
+M4 was declared done on interaction plus attributes, and it was — but §10 lists
+a UI surface, and five items on that list had never been built: "expand k hops,
+isolate subgraph", "box select", "Export: PNG, and coordinates as CSV/Parquet",
+and "column mapping dialog". They are recorded together because they were built
+together, in that order, each one deliberately reusing the last.
+
+The shared shape is worth stating once, because it is what made four features
+cheap rather than four features expensive: **every one of them already had its
+hard part built, and was missing only its edge.** The k-hop walk is the 1-hop
+query generalised. Box select is the pick grid answering a different question.
+Isolate is the M4 style buffer's `HIDDEN_SIZE_CODE` driven from somewhere new.
+The mapping dialog chooses the arguments to an `IngestOptions` that has been
+plumbed end-to-end into the Rust parser since M1. Only export is genuinely new
+code, and it is sixty lines.
+
+### k hops, and where the walk lives
+
+`skein_core::khop` is one level-synchronous BFS: per level, a single pass over
+the whole CSR rather than a lookup per frontier node. That is not an
+optimisation, it is forced — the stored CSR is directed and in-edges have no
+index, so "what points at this frontier?" is a scan whichever way it is asked,
+and the scan may as well be shared across the frontier. Cost is
+O(hops × edges), scratch is O(nodes): three bitmaps and a parent array.
+`symmetrize` would buy back a few passes and cost another 40 MB of targets at
+the §9 top tier, which is the right trade for the layout hierarchy walking the
+adjacency thousands of times and the wrong one for a query the user waits on
+once.
+
+Five hops is the ceiling. In a scale-free graph the fifth has usually swallowed
+the component; past there the user is paying seconds to select everything.
+
+Two additions to the reply, both about honesty rather than capability:
+
+- **`parents`** — each member's BFS-tree parent. Past one hop, a star drawn
+  from the seed to each member would draw lines that are not edges of the
+  graph. Every `(parent, node)` pair is a real edge. At one hop every parent
+  *is* the seed, so the M4 overlay is unchanged bit for bit.
+- **`mask`** — one byte per node, uncapped, while the list stays capped at 20k
+  for display. Isolating against the capped list would hide a different graph
+  than the count on screen claims.
+
+`neighbors` is now `khop` at one hop and its six original tests pass unchanged,
+which is the evidence that the M4 path did not move.
+
+### Isolate composes; it does not overwrite
+
+Two things want to hide nodes — the attributes panel's filters and this — and
+they arrive from different places at different times, so neither can own the
+buffer. Both are kept as inputs and the style buffer is derived from the pair
+on every change. That is also what makes them compose: isolating inside a
+filtered graph shows the intersection, rather than whichever was applied last.
+
+A graph with no attributes attached has no style buffer at all until something
+needs to hide part of it, so `applyVisibilityMask` builds one — which is why
+`UNSTYLED_NODE_RGB` now exists and is interpolated into the WGSL and passed as
+the WebGL2 uniform. Hiding a node must not repaint the graph as a side effect,
+and before this the unstyled colour was a literal written twice in two shading
+languages.
+
+**Isolate is a property of the current selection, not a mode.** It survives
+changing the depth on the same seed — the same subgraph, drawn wider — and is
+released by selecting anything else. The alternative was tried: sticky isolate
+means a click on a neighbour instantly hides almost everything, which reads as
+the graph disappearing rather than as a setting that is still on. Clearing the
+selection releases it too, because an isolated view with nothing selected is a
+graph the user cannot get back and there would be no control left on screen to
+explain why.
+
+### Box select: a mode as well as a modifier
+
+Shift-drag is the desktop convention and costs one line. It is not enough on
+its own: touch has no modifier key, and this is the only canvas interaction
+with nothing to fall back to — the same argument D18 made for the zoom
+buttons, and the reason there is a ▭ toggle beside them. A press that never
+moved is still a click, so being in box mode does not stop you selecting a
+node.
+
+The band is an absolutely-positioned div over the canvas, not a renderer pass.
+One rectangle at pointer rate is something the compositor draws for free;
+putting it in the render path means a buffer, a pipeline and an upload per
+frame, in both backends.
+
+The overlay carries no edges. The edges induced by a rectangle are not in hand,
+and joining its members to each other would be a claim about adjacency nobody
+made.
+
+### Export, and the direction the privacy invariant runs
+
+§7 is usually read as "nothing gets out", and this is the feature that tests
+whether that was ever the point. It was not: the invariant is that the data
+does not leave *without the user*. Both exports are built in the tab and handed
+over as a blob URL — a download that went through a server, even only to format
+the file, would be the graph leaving the tab and the no-network gate would be
+right to fail it. The gate drives both buttons now.
+
+The PNG is captured inside the frame that drew it. Neither backend preserves
+its drawing buffer, and `preserveDrawingBuffer` would make every frame pay a
+copy to serve a button pressed once; instead `capture()` parks a resolver that
+the frame loop drains immediately after submitting, while the buffer is still
+the canvas's.
+
+Coordinates are exported for **every node**, not for whatever the filters, the
+isolation or the D13 draw sample left on screen. The file is the layout, not
+the view: a coordinate dump that silently depended on the camera could not be
+reproduced and could not be joined back onto the edge list. Rows are built in
+64k chunks so a million of them never exist twice at once, and ids are RFC 4180
+quoted — they come from the user's file and may contain the delimiter, which
+would otherwise produce a file this app's own scanner reads back as a different
+graph. `export.spec.ts` hashes the CSV's coordinates back into
+`positionsHash`, so a dump of the seeded scatter instead of the settled layout
+cannot pass.
+
+**Parquet is not here**, and §10 does list it. Writing it means DuckDB, and
+loading a 5.3 MB bundle to dump three columns would undo D14's laziness for
+every session that only wanted coordinates. Revisit if the panel is already
+open — the engine is there and `COPY … TO` is one query — but not as the
+unconditional path.
+
+### Column mapping, and a second CSV reader
+
+Everything the dialog produces was already plumbed: `IngestOptions` carries
+delimiter, header flag and three column indices, and has been passed into
+`skein_core`'s scanner since M1. What was missing was any way to *say* it, so
+a semicolon-separated file, or one whose edge was not in the first two
+columns, could not be opened at all.
+
+The preview parser is a second, tiny CSV reader beside the real one, and that
+duplication is deliberate rather than overlooked. The authority is instantiated
+in the worker behind a streaming ingest that produces a CSR and nothing else:
+there is no way to ask it "what would the first six rows look like under this
+delimiter?" without ingesting the file, which is the thing the user has not
+committed to yet. It reads 64 KB and decides nothing.
+
+Sniffing is the delimiter that splits the first line into the most fields, and
+a header is guessed as "a first row with no numbers in it". That guess is wrong
+for an unheaded list of string ids — and it is exactly the assumption the app
+made unconditionally before, except that now the row is on screen with a
+checkbox beside it. A mapping that cannot describe an edge (source == target,
+or a delimiter that leaves one column) disables import and says which.
+
+The one §10 phrase not covered is "metadata join key": attributes are attached
+later, from inside the graph view, against columns this file does not have.
+
+### What this leaves
+
+§10 is complete except for Parquet export and Parquet/Arrow *ingest*, both of
+which are the same deferred question about pulling a second file format into
+the ingest path.
+
+**Revisit if:** k-hop at the top tier turns out to be worth a resident reverse
+index after all (measure `khop` at 5 hops on `medium` first — it has never been
+run on real hardware), box select wants to add to a selection rather than
+replace it (which needs a selection *set* in the panel, not just in the
+overlay), or export grows a "just what I can see" option, at which point the
+"the file is the layout" rule above becomes a choice the UI has to name rather
+than a property it can assume.
