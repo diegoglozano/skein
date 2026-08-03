@@ -13,6 +13,12 @@ const NODE_ATTRS = path.resolve(
 );
 
 test('app makes no off-origin requests', async ({ page, baseURL }) => {
+  // Longer than the 120 s default because this one test drives the whole app —
+  // ingest, layout, render, explore, k hops, export and the DuckDB attributes
+  // path — and every path added to the app is added here. It sat just under
+  // the default and went over it on a loaded runner; the budget is the gate's
+  // coverage, so raise the budget.
+  test.setTimeout(240_000);
   const origin = new URL(baseURL!).origin;
   const offOrigin: string[] = [];
   const all: string[] = [];
@@ -70,7 +76,11 @@ test('app makes no off-origin requests', async ({ page, baseURL }) => {
   await expect(page.getByTestId('selection-card')).toContainText('within 3 hops', {
     timeout: 30_000,
   });
-  await page.getByTestId('isolate-toggle').check();
+  // Deliberately not `isolate` as well: it is main-thread style composition
+  // over a mask this test has already fetched, so it opens no request surface
+  // the colour-by and filter steps below do not already drive — and it would
+  // cost this test a styled repaint, which under SwiftShader is three times an
+  // unstyled one (D19).
   await page.getByTestId('selection-card').getByRole('button', { name: 'clear selection' }).click();
 
   // And through the export path (§10), which is the one place the app hands

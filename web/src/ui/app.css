@@ -81,6 +81,112 @@ h1 {
   font-size: 0.9rem;
 }
 
+/* Column mapping (§10). Takes the drop zone's place while a file is waiting on
+   its answer, so the page keeps one column of content rather than growing a
+   modal layer over it. */
+.mapping {
+  margin-top: 2rem;
+  border: 1px solid #3a3f55;
+  border-radius: 12px;
+  padding: 1.5rem;
+}
+
+.mapping h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.mapping .muted {
+  color: #8a8fa3;
+  font-size: 0.85rem;
+}
+
+.mapping-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin: 1rem 0;
+  font-size: 0.85rem;
+}
+
+.mapping-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #8a8fa3;
+}
+
+.mapping-controls select {
+  background: #11131c;
+  border: 1px solid #3a3f55;
+  color: #e6e6ea;
+  border-radius: 6px;
+  padding: 0.2rem 0.4rem;
+  max-width: 10rem;
+}
+
+/* A wide file must scroll its preview rather than the page. */
+.mapping-preview {
+  overflow-x: auto;
+}
+
+.mapping-preview table {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.mapping-preview th,
+.mapping-preview td {
+  border: 1px solid #1c1f2e;
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  white-space: nowrap;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mapping-preview th {
+  color: #8a8fa3;
+  font-weight: 500;
+}
+
+.mapping-preview th em {
+  display: block;
+  font-style: normal;
+  font-size: 0.7rem;
+  color: #ffb847;
+}
+
+.mapping-preview th.is-source,
+.mapping-preview th.is-target,
+.mapping-preview th.is-weight {
+  color: #e6e6ea;
+  border-color: #ffb84766;
+}
+
+.mapping-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.mapping-actions button {
+  border: 1px solid #3a3f55;
+  background: transparent;
+  color: #9fb6ff;
+  border-radius: 8px;
+  padding: 0.4rem 1.1rem;
+  cursor: pointer;
+}
+
+.mapping-actions button:disabled {
+  color: #5b6070;
+  cursor: not-allowed;
+}
+
 /* Sample generation (no data on the device — see workers/generate.ts). Sized
    for a thumb: full-width rows on a phone, inline on a wide screen. */
 .samples {

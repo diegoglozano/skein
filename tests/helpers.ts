@@ -43,7 +43,11 @@ export async function canvasPixels(page: Page): Promise<Buffer> {
   return Buffer.from(data, 'base64');
 }
 
-// Build a File from a same-origin fixture and drop it on the dropzone.
+// Build a File from a same-origin fixture and drop it on the dropzone, then
+// accept the column mapping dialog's own reading of the file (§10) — every
+// fixture is a comma-separated `source,target` list with a header, which is
+// what it guesses. A test that wants to *change* the mapping drives the dialog
+// itself; this is the path everything else needs to get past.
 // lastModified is pinned so the OPFS graph id is deterministic across runs.
 export async function dropFixture(page: Page, fixture: string): Promise<void> {
   const dataTransfer = await page.evaluateHandle(async (name) => {
@@ -53,6 +57,7 @@ export async function dropFixture(page: Page, fixture: string): Promise<void> {
     return dt;
   }, fixture);
   await page.dispatchEvent('.dropzone', 'drop', { dataTransfer });
+  await page.getByTestId('mapping-import').click({ timeout: 30_000 });
 }
 
 // Generate a sample graph of the requested size in the app itself — the path a

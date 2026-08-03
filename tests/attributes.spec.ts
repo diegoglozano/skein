@@ -187,7 +187,7 @@ test('the DuckDB payload is not fetched until attributes are asked for', async (
   // Exercise the rest of the app first — ingest, layout, render, explore.
   await page.getByTestId('node-search').fill('n9999');
   await page.getByTestId('search-hit').first().click();
-  await expect(page.getByTestId('selection-card')).toContainText('neighbours', {
+  await expect(page.getByTestId('selection-card')).toContainText('within 1 hop', {
     timeout: 15_000,
   });
   await page.waitForTimeout(2000);
