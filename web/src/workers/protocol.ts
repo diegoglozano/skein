@@ -60,8 +60,11 @@ export type ToWorker =
   | { type: 'cancel-layout' }
   | { type: 'save-positions'; id: string; seed: number; positions: Float32Array }
   | { type: 'load-positions'; id: string; seed: number }
-  /** 1-hop neighbourhood of `node`, both edge directions (M4 selection). */
-  | { type: 'neighbors'; id: string; node: number }
+  /**
+   * The neighbourhood of `node` within `hops` hops, both edge directions
+   * (M4 selection, §10's "expand k hops").
+   */
+  | { type: 'neighbors'; id: string; node: number; hops: number }
   /**
    * Persist an attached node-attributes file next to the graph, so reopening
    * it restores the join. The main thread hands DuckDB the same `File`
@@ -116,8 +119,24 @@ export type FromWorker =
   /** The manifest now records the attached file; carries the fresh summary. */
   | { type: 'attributes-saved'; id: string; graph: GraphSummary }
   | { type: 'positions'; id: string; seed: number; positions: Float32Array | null }
-  /** `neighbors` is deduped and capped for display; `total` is the true count. */
-  | { type: 'neighbors'; id: string; node: number; neighbors: Uint32Array; total: number }
+  /**
+   * `neighbors` is deduped and capped for display; `total` is the true count.
+   * `parents` is aligned to `neighbors` and holds each one's BFS-tree parent,
+   * so the highlight overlay draws edges that exist even past one hop.
+   * `mask` is one byte per node — the seed and everything within `hops` — and
+   * is *not* capped: it is what "isolate" hides against, and a capped mask
+   * would isolate a smaller graph than `total` reports.
+   */
+  | {
+      type: 'neighbors';
+      id: string;
+      node: number;
+      hops: number;
+      neighbors: Uint32Array;
+      parents: Uint32Array;
+      total: number;
+      mask: Uint8Array;
+    }
   /** `request` is the message that failed. Listeners must check it: the
    * layout waiter and the ingest UI share this channel, and an untagged error
    * from a click-rate query used to abort an in-flight layout. */

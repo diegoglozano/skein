@@ -1,13 +1,16 @@
-// M4 explore surface (§10): search by node id, select, 1-hop neighbourhood,
-// and hover. The hover assertion doubles as an end-to-end check of the pick
-// path — selecting a node centres the camera on it, so the node under the
-// canvas centre must be the one we just selected. That exercises the camera
-// inverse and the uniform pick grid against real laid-out coordinates.
+// M4 explore surface (§10): search by node id, select, the k-hop
+// neighbourhood, isolating it, and hover. The hover assertion doubles as an
+// end-to-end check of the pick path — selecting a node centres the camera on
+// it, so the node under the canvas centre must be the one we just selected.
+// That exercises the camera inverse and the uniform pick grid against real
+// laid-out coordinates.
 //
-// Three of the four tests want the same thing to exist — a laid-out `tiny` —
+// Four of the five tests want the same thing to exist — a laid-out `tiny` —
 // and none of them destroys it, so they share one tab created in `beforeAll`
-// rather than paying a fresh ingest + layout each. The WebGL2 one keeps its
-// own, because the backend is chosen before any script runs.
+// rather than paying a fresh ingest + layout each. (The isolate test styles
+// the graph, which is destructive-looking, but it clears the selection on the
+// way out and the release is the last thing it asserts.) The WebGL2 one keeps
+// its own tab, because the backend is chosen before any script runs.
 
 import { test, expect, type Page } from '@playwright/test';
 import { canvasPixels, ingestAndLayout } from './helpers';
@@ -56,7 +59,7 @@ test.describe('explore on a laid-out graph', () => {
     await hits.first().click();
     const card = page.getByTestId('selection-card');
     await expect(card.getByRole('heading')).toHaveText('n9999');
-    await expect(card).toContainText('neighbours', { timeout: 15_000 });
+    await expect(card).toContainText('within 1 hop', { timeout: 15_000 });
 
     // Ground truth straight from the fixture — the CSV has exactly these five
     // rows touching n9999, in either column:
@@ -64,7 +67,7 @@ test.describe('explore on a laid-out graph', () => {
     // Asserting the set (not just self-consistency) is what catches a bad
     // dictionary decode or a one-directional neighbour query.
     await expect(card).toContainText('degree 5');
-    await expect(card).toContainText('5 neighbours');
+    await expect(card).toContainText('5 within 1 hop');
     const neighbors = page.getByTestId('neighbor-list').getByRole('button');
     await expect(neighbors).toHaveCount(5);
     expect((await neighbors.allTextContents()).sort()).toEqual([
@@ -107,6 +110,67 @@ test.describe('explore on a laid-out graph', () => {
   test('a query with no match reports it', async () => {
     await page.getByTestId('node-search').fill('nope-not-a-node');
     await expect(page.getByTestId('search-results')).toContainText('no match');
+  });
+
+  // §10's "expand k hops, isolate subgraph". Ground truth again straight from
+  // the fixture, computed by a BFS over `tiny.csv` treating it as undirected —
+  // 71 nodes lie within two hops of n9999, and the depth control has to agree
+  // with that exactly. A count that merely grows would pass against a walk
+  // that double-counts or one that forgets to ignore edge direction on the
+  // second level.
+  test('expanding hops widens the neighbourhood, and isolate hides the rest', async () => {
+    await page.getByTestId('node-search').fill('n9999');
+    await page.getByTestId('search-hit').first().click();
+    const card = page.getByTestId('selection-card');
+    await expect(card).toContainText('5 within 1 hop', { timeout: 15_000 });
+
+    await page.getByTestId('hop-2').click();
+    await expect(card).toContainText('71 within 2 hops', { timeout: 15_000 });
+    // The list caps at 100, and 71 is under it, so every member is on screen.
+    await expect(page.getByTestId('neighbor-list').getByRole('button')).toHaveCount(71);
+    await expect(page.getByTestId('hop-2')).toHaveAttribute('aria-pressed', 'true');
+
+    // Going back down must shrink it again — the walk restarts from the seed
+    // rather than continuing from where the last one stopped.
+    await page.getByTestId('hop-1').click();
+    await expect(card).toContainText('5 within 1 hop', { timeout: 15_000 });
+
+    // Isolate has to reach the framebuffer: it composes a style buffer out of
+    // the worker's mask, and a mask that never got applied would leave the
+    // panel saying the right thing over an unchanged picture. Nothing moves
+    // the camera between these captures — selecting centres it, and neither
+    // the depth buttons nor the checkbox do — so visibility is the only thing
+    // that can differ.
+    //
+    // Only inequality is asserted, here and below. Two captures of the same
+    // state are *usually* byte-identical (D19) but not reliably so under
+    // SwiftShader, so "the picture came back exactly" is not a claim this
+    // suite can make; which nodes the mask covers is pinned natively instead,
+    // in skein-core's `khop` tests.
+    await settle(page);
+    const whole = await canvasPixels(page);
+    await page.getByTestId('isolate-toggle').check();
+    await settle(page);
+    const isolated = await canvasPixels(page);
+    expect(whole.equals(isolated), 'isolate did not change the rendered frame').toBe(false);
+
+    // Clearing the selection has to release it: an isolated view with nothing
+    // selected is a graph the user cannot get back, and no control would be
+    // left on screen to say why. Re-selecting proves the release was of the
+    // *mask* and not merely of the checkbox — a checkbox that came back
+    // unticked over a still-hidden graph is the failure this catches.
+    await card.getByRole('button', { name: 'clear selection' }).click();
+    await expect(page.getByTestId('selection-card')).toHaveCount(0);
+    await settle(page);
+    expect(
+      isolated.equals(await canvasPixels(page)),
+      'clearing the selection left the graph isolated',
+    ).toBe(false);
+
+    await page.getByTestId('search-hit').first().click();
+    await expect(card).toContainText('5 within 1 hop', { timeout: 15_000 });
+    await expect(page.getByTestId('isolate-toggle')).not.toBeChecked();
+    await card.getByRole('button', { name: 'clear selection' }).click();
   });
 
   // Last in the group: re-layout replaces the positions the tests above assert
@@ -159,7 +223,7 @@ test('the WebGL2 fallback highlights a selection without erroring', async ({ pag
 
   await page.getByTestId('node-search').fill('n9999');
   await page.getByTestId('search-hit').first().click();
-  await expect(page.getByTestId('selection-card')).toContainText('neighbours', {
+  await expect(page.getByTestId('selection-card')).toContainText('within 1 hop', {
     timeout: 15_000,
   });
 

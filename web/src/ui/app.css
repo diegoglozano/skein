@@ -433,6 +433,39 @@ h1 {
   cursor: pointer;
 }
 
+/* Hop depth and isolate (§10 "expand k hops, isolate subgraph"). */
+.hop-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.hop-controls .hop {
+  border: 1px solid #3a3f55;
+  background: transparent;
+  color: #9fb6ff;
+  border-radius: 6px;
+  min-width: 1.6rem;
+  padding: 0.15rem 0;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.hop-controls .hop.current {
+  border-color: #ffb847;
+  color: #ffb847;
+}
+
+.hop-controls .isolate {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  color: #8b8fa3;
+}
+
 .explore .hint {
   line-height: 1.5;
 }

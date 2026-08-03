@@ -12,25 +12,34 @@ pub fn total_degrees(offsets: &[u32], targets: &[u32]) -> Vec<u32> {
     skein_core::total_degrees(offsets, targets)
 }
 
-/// 1-hop neighbourhood of `node`, ignoring edge direction (§10 selection).
-/// Returns `{ neighbors, total }`: `neighbors` is capped at `cap` in ascending
-/// index order, `total` is the honest count before truncation.
+/// The k-hop neighbourhood of `node`, ignoring edge direction (§10 selection
+/// and "expand k hops"). Returns `{ neighbors, parents, total, mask }`:
+/// `neighbors` is capped at `cap` in ascending index order with `parents`
+/// aligned to it, `total` is the honest count before truncation, and `mask`
+/// is one uncapped byte per node for isolating the subgraph.
 #[wasm_bindgen]
-pub fn node_neighbors(offsets: &[u32], targets: &[u32], node: u32, cap: usize) -> js_sys::Object {
-    let (list, total) = skein_core::neighbors(offsets, targets, node, cap);
+pub fn node_neighbors(
+    offsets: &[u32],
+    targets: &[u32],
+    node: u32,
+    hops: u32,
+    cap: usize,
+) -> js_sys::Object {
+    let found = skein_core::khop(offsets, targets, node, hops, cap);
     let obj = js_sys::Object::new();
-    js_sys::Reflect::set(
-        &obj,
-        &JsValue::from_str("neighbors"),
-        &js_sys::Uint32Array::from(&list[..]),
-    )
-    .unwrap();
-    js_sys::Reflect::set(
-        &obj,
-        &JsValue::from_str("total"),
-        &JsValue::from_f64(total as f64),
-    )
-    .unwrap();
+    let set = |key: &str, value: &JsValue| {
+        js_sys::Reflect::set(&obj, &JsValue::from_str(key), value).unwrap();
+    };
+    set(
+        "neighbors",
+        &js_sys::Uint32Array::from(&found.nodes[..]).into(),
+    );
+    set(
+        "parents",
+        &js_sys::Uint32Array::from(&found.parents[..]).into(),
+    );
+    set("total", &JsValue::from_f64(found.total as f64));
+    set("mask", &js_sys::Uint8Array::from(&found.mask[..]).into());
     obj
 }
 

@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  applyVisibilityMask,
   Camera,
   createRenderer,
   lodLimits,
@@ -48,6 +49,13 @@ const TOUCH_CLICK_SLOP_PX = 12;
 const ZOOM_STEP = 1.6;
 /** Neighbours listed in the sidebar; the highlight still covers all of them. */
 const NEIGHBOR_LIST_LIMIT = 100;
+/**
+ * Furthest the neighbourhood walk will go (§10 "expand k hops"). Each hop is
+ * another pass over the whole CSR in the worker, and in a scale-free graph the
+ * fifth one has usually swallowed the component anyway — past here the user is
+ * paying seconds to select everything.
+ */
+const MAX_HOPS = 5;
 
 /**
  * Phone-shaped viewport. Above it the explore panel is a docked sidebar; below
@@ -163,6 +171,7 @@ interface NodeRef {
 
 interface Neighborhood {
   node: number;
+  hops: number;
   total: number;
   listed: NodeRef[];
 }
@@ -189,6 +198,16 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
   const [selected, setSelected] = useState<NodeRef | null>(null);
   const [neighborhood, setNeighborhood] = useState<Neighborhood | null>(null);
   const [query, setQuery] = useState('');
+  /**
+   * How far the neighbourhood walk reaches from the selection (§10). Mirrored
+   * into a ref because the pointer handlers live inside the render effect,
+   * which is rebuilt only on a seed change — closing over the state would
+   * leave a click asking for whatever depth was set when the graph loaded.
+   */
+  const [hops, setHops] = useState(1);
+  const hopsRef = useRef(1);
+  /** Hide everything outside that neighbourhood (§10 "isolate subgraph"). */
+  const [isolated, setIsolated] = useState(false);
 
   const narrow = useNarrow();
   /** Bottom-sheet state; meaningless while the panel is docked (wide screen). */
@@ -196,7 +215,7 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
 
   /** Imperative handle into the render effect, for sidebar-driven selection. */
   const viewApi = useRef<{
-    select: (node: number) => void;
+    select: (node: number, hops: number) => void;
     focus: (node: number) => void;
     setStyle: (style: Uint32Array | null) => void;
     zoomBy: (factor: number) => void;
@@ -212,10 +231,41 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
   const [storeVersion, setStoreVersion] = useState(0);
   const [attrValues, setAttrValues] = useState<Record<string, string> | null>(null);
 
-  const applyStyle = useCallback((style: Uint32Array | null) => {
-    styleRef.current = style;
-    viewApi.current?.setStyle(style);
-  }, []);
+  // Two independent things write visibility — the attributes panel's filters
+  // and "isolate" — and they arrive from different places at different times,
+  // so neither can own the buffer the renderer sees. Both are kept as inputs
+  // and the buffer is derived from them on every change, which is also what
+  // makes the two compose: isolating inside a filtered graph shows the
+  // intersection rather than whichever was applied last.
+  const maskRef = useRef<Uint8Array | null>(null);
+  const isolatedRef = useRef(false);
+
+  const composeStyle = useCallback((): Uint32Array | null => {
+    const mask = isolatedRef.current ? maskRef.current : null;
+    if (!mask) return styleRef.current;
+    return applyVisibilityMask(styleRef.current, mask, graph.nodeCount);
+  }, [graph.nodeCount]);
+
+  const pushStyle = useCallback(() => {
+    viewApi.current?.setStyle(composeStyle());
+  }, [composeStyle]);
+
+  const applyStyle = useCallback(
+    (style: Uint32Array | null) => {
+      styleRef.current = style;
+      pushStyle();
+    },
+    [pushStyle],
+  );
+
+  const setIsolate = useCallback(
+    (on: boolean) => {
+      isolatedRef.current = on;
+      setIsolated(on);
+      pushStyle();
+    },
+    [pushStyle],
+  );
 
   const handleStore = useCallback((store: AttributeStore | null) => {
     storeRef.current = store;
@@ -357,8 +407,13 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         renderer.setHighlight(overlayNodes.subarray(0, overlayFixed + (hovered ? 1 : 0)), overlayEdges);
       };
 
-      /** Rebuild the selection part of the overlay (click rate, not hover). */
-      const setSelectionOverlay = (neighbors: Uint32Array) => {
+      /**
+       * Rebuild the selection part of the overlay (click rate, not hover).
+       * `parents` is each member's BFS-tree parent, so past one hop the
+       * overlay draws the edges the walk actually used — a star from the seed
+       * would draw lines that are not edges of the graph.
+       */
+      const setSelectionOverlay = (neighbors: Uint32Array, parents: Uint32Array) => {
         const k = neighbors.length;
         const base = selectedNode >= 0 ? 1 : 0;
         // +1 for the hover slot at the tail.
@@ -369,20 +424,35 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
 
         overlayEdges = new Uint32Array(2 * k);
         for (let i = 0; i < k; i++) {
-          overlayEdges[2 * i] = selectedNode;
+          overlayEdges[2 * i] = parents[i];
           overlayEdges[2 * i + 1] = neighbors[i];
         }
         uploadOverlay();
       };
 
-      const select = (node: number) => {
+      const empty = new Uint32Array(0);
+
+      const select = (node: number, hopCount: number) => {
         selectedNode = node;
-        setSelectionOverlay(new Uint32Array(0));
+        setSelectionOverlay(empty, empty);
         setSelected(node >= 0 ? describe(node) : null);
         setNeighborhood(null);
+        // The old mask describes a neighbourhood that no longer exists. Drop
+        // it before the reply lands, or an isolated view keeps hiding against
+        // the previous selection while the panel already shows the new one.
+        maskRef.current = null;
         if (node >= 0) {
           neighborsAskedAt = performance.now();
-          worker.postMessage({ type: 'neighbors', id: graph.id, node } satisfies ToWorker);
+          worker.postMessage({
+            type: 'neighbors',
+            id: graph.id,
+            node,
+            hops: hopCount,
+          } satisfies ToWorker);
+        } else {
+          // Nothing is selected, so there is no subgraph to isolate; leaving
+          // it on would hide the whole graph with no way to see that is why.
+          setIsolate(false);
         }
       };
 
@@ -391,14 +461,16 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         if (msg.type !== 'neighbors' || msg.id !== graph.id) return;
         if (msg.node !== selectedNode) return; // a stale reply for a previous click
         stats.neighborsMs = performance.now() - neighborsAskedAt;
-        setSelectionOverlay(msg.neighbors);
+        setSelectionOverlay(msg.neighbors, msg.parents);
+        maskRef.current = msg.mask;
+        pushStyle();
         // Decode ids once, here — doing it in the JSX re-ran TextDecoder for
         // every listed neighbour on every hover-driven re-render.
         const listed: NodeRef[] = [];
         for (let i = 0; i < Math.min(msg.neighbors.length, NEIGHBOR_LIST_LIMIT); i++) {
           listed.push(describe(msg.neighbors[i]));
         }
-        setNeighborhood({ node: msg.node, total: msg.total, listed });
+        setNeighborhood({ node: msg.node, hops: msg.hops, total: msg.total, listed });
       };
       worker.addEventListener('message', onNeighbors);
       teardown.push(() => worker.removeEventListener('message', onNeighbors));
@@ -428,7 +500,10 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
       };
       // Re-apply whatever the attributes panel had set: this effect re-runs on
       // a seed change with a brand-new renderer, whose style buffer is empty.
-      renderer.setNodeStyle(styleRef.current);
+      // (An isolate mask never survives to here — a re-layout clears the
+      // selection it belonged to — but composing is what makes that true
+      // rather than something this line has to know.)
+      renderer.setNodeStyle(composeStyle());
 
       // ---- Pointer: pan/zoom plus pick-on-move and select-on-click.
       //
@@ -555,7 +630,7 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
         dragging = false;
         const slop = touchy(e) ? TOUCH_CLICK_SLOP_PX : CLICK_SLOP_PX;
         if (travel > slop) return;
-        select(pickAt(e.clientX, e.clientY, pickRadius(e)));
+        select(pickAt(e.clientX, e.clientY, pickRadius(e)), hopsRef.current);
       };
       // Without this, a UA-cancelled gesture leaves `dragging` latched: the
       // camera then pans with no button held and, worse, pointermove never
@@ -790,7 +865,7 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
       // await in `run` re-checks `disposed` before touching the renderer.
       for (const fn of teardown.splice(0)) fn();
     };
-  }, [graph, seed, worker, describe]);
+  }, [graph, seed, worker, describe, composeStyle, pushStyle, setIsolate]);
 
   // A re-layout invalidates every coordinate, so the old selection means
   // nothing visually; clear the explore panel with it.
@@ -798,7 +873,20 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
     setHover(null);
     setSelected(null);
     setNeighborhood(null);
-  }, [seed]);
+    maskRef.current = null;
+    setIsolate(false);
+  }, [seed, setIsolate]);
+
+  /** Re-walk from the current selection when the depth changes. */
+  const changeHops = useCallback(
+    (next: number) => {
+      const clamped = Math.min(MAX_HOPS, Math.max(1, Math.round(next)));
+      hopsRef.current = clamped;
+      setHops(clamped);
+      if (selected) viewApi.current?.select(selected.node, clamped);
+    },
+    [selected],
+  );
 
   // Attribute values are fetched for the *selection* only, never for hover:
   // hover changes at pointer rate and this is a round trip to a query engine
@@ -824,7 +912,7 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
   }, [selected, storeVersion]);
 
   const pick = useCallback((node: number) => {
-    viewApi.current?.select(node);
+    viewApi.current?.select(node, hopsRef.current);
     if (node >= 0) viewApi.current?.focus(node);
   }, []);
 
@@ -974,9 +1062,39 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
                 <p className="muted">
                   degree {selected.degree.toLocaleString()}
                   {neighborhood
-                    ? ` · ${neighborhood.total.toLocaleString()} neighbours`
+                    ? ` · ${neighborhood.total.toLocaleString()} within ${
+                        neighborhood.hops === 1 ? '1 hop' : `${neighborhood.hops} hops`
+                      }`
                     : ' · finding neighbours…'}
                 </p>
+                <div className="hop-controls">
+                  <span className="muted">hops</span>
+                  {/* A row of depths rather than a stepper: there are five of
+                      them, each is one worker round trip, and seeing which one
+                      is current matters more than saving three characters. */}
+                  {Array.from({ length: MAX_HOPS }, (_, i) => i + 1).map((k) => (
+                    <button
+                      key={k}
+                      className={k === hops ? 'hop current' : 'hop'}
+                      aria-pressed={k === hops}
+                      aria-label={`expand ${k} ${k === 1 ? 'hop' : 'hops'}`}
+                      data-testid={`hop-${k}`}
+                      onClick={() => changeHops(k)}
+                    >
+                      {k}
+                    </button>
+                  ))}
+                  <label className="isolate">
+                    <input
+                      type="checkbox"
+                      checked={isolated}
+                      disabled={!neighborhood}
+                      data-testid="isolate-toggle"
+                      onChange={(e) => setIsolate(e.target.checked)}
+                    />
+                    isolate
+                  </label>
+                </div>
                 {neighborhood && neighborhood.listed.length > 0 && (
                   <ul className="neighbors" data-testid="neighbor-list">
                     {neighborhood.listed.map((n) => (
@@ -1011,7 +1129,8 @@ export function GraphView({ graph, name, worker, attached, onClose }: {
             {!selected && !hover && !search && (
               <p className="muted hint">
                 Hover a node for its id and degree, click to select it and highlight its
-                neighbours. Picking wakes up once the layout settles.
+                neighbours. From there, expand the walk to 5 hops and isolate what it
+                reaches. Picking wakes up once the layout settles.
               </p>
             )}
 

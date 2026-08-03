@@ -52,7 +52,7 @@ fn culled() -> VsOut {
 @vertex
 fn nodeVs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut {
   let node = nodeOrder[ii];
-  var color = vec4f(0.85, 0.87, 0.95, 0.9);
+  var color = vec4f(UNSTYLED_NODE, 0.9);
   var scale = 1.0;
   if (view.styled > 0.5) {
     let s = unpack4x8unorm(nodeStyle[node]);

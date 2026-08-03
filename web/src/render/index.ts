@@ -17,10 +17,12 @@ export {
   type LodBudget,
 } from './lod';
 export {
+  applyVisibilityMask,
   HIDDEN_SIZE_CODE,
   NEUTRAL_SIZE_CODE,
   packStyle,
   sizeCode,
+  UNSTYLED_NODE_RGB,
 } from './style';
 
 export async function createRenderer(canvas: HTMLCanvasElement): Promise<Renderer> {
