@@ -13,6 +13,12 @@ const NODE_ATTRS = path.resolve(
 );
 
 test('app makes no off-origin requests', async ({ page, baseURL }) => {
+  // Longer than the 120 s default because this one test drives the whole app —
+  // ingest, layout, render, explore, k hops, export and the DuckDB attributes
+  // path — and every path added to the app is added here. It sat just under
+  // the default and went over it on a loaded runner; the budget is the gate's
+  // coverage, so raise the budget.
+  test.setTimeout(240_000);
   const origin = new URL(baseURL!).origin;
   const offOrigin: string[] = [];
   const all: string[] = [];
@@ -63,9 +69,30 @@ test('app makes no off-origin requests', async ({ page, baseURL }) => {
   // neighbourhood query.
   await page.getByTestId('node-search').fill('n9999');
   await page.getByTestId('search-hit').first().click();
-  await expect(page.getByTestId('selection-card')).toContainText('neighbours', {
+  await expect(page.getByTestId('selection-card')).toContainText('within 1 hop', {
     timeout: 15_000,
   });
+  await page.getByTestId('hop-3').click();
+  await expect(page.getByTestId('selection-card')).toContainText('within 3 hops', {
+    timeout: 30_000,
+  });
+  // Deliberately not `isolate` as well: it is main-thread style composition
+  // over a mask this test has already fetched, so it opens no request surface
+  // the colour-by and filter steps below do not already drive — and it would
+  // cost this test a styled repaint, which under SwiftShader is three times an
+  // unstyled one (D19).
+  await page.getByTestId('selection-card').getByRole('button', { name: 'clear selection' }).click();
+
+  // And through the export path (§10), which is the one place the app hands
+  // data *out*: a download that went anywhere but a blob URL — even to a
+  // formatting service — would be the graph leaving the tab.
+  for (const control of ['export-png', 'export-positions']) {
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId(control).click(),
+    ]);
+    expect(await download.path()).toBeTruthy();
+  }
 
   // And through the M4 attributes path. This is the reason the test exists at
   // all for DuckDB: `getJsDelivrBundles()` is what every duckdb-wasm example

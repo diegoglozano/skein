@@ -213,7 +213,32 @@ The roadmap is REQUIREMENTS.md §11 (M0–M5). Status as of 2026-07-31:
   the way back from a view panned off into empty space. `tests/mobile.spec.ts`
   gates it at 390×844 with touch, driving the pinch over CDP because
   Playwright's touchscreen API is single-contact.
-- **M5:** not started; see §11 — distribution (D10) is already done.
+- **§10's remaining UI surface — done (2026-08-03), four features in one pass
+  (D20).** Everything §10 listed and M4 had not built. **k hops + isolate:**
+  `skein-core::khop` is one level-synchronous BFS (a single CSR pass per level,
+  because in-edges have no index — O(hops × edges), scratch O(nodes)); the reply
+  gained `parents` (BFS-tree edges, so past one hop the overlay draws edges that
+  exist) and an *uncapped* `mask` (isolating against the 20k display cap would
+  hide a different graph than the count claims). `neighbors` is now `khop` at one
+  hop and its six original tests pass unchanged. Isolate *composes* with the M4
+  filters rather than overwriting — both are inputs, the style buffer is derived
+  — and is a property of the current selection, released when you select
+  something else. **Box select:** shift-drag plus a ▭ toggle (touch has no
+  modifier); the pick grid answers the rectangle query; the band is a plain div,
+  not a renderer pass. **Export:** PNG captured *inside* the frame that drew it
+  (neither backend preserves its drawing buffer and `preserveDrawingBuffer`
+  would tax every frame), and `id,x,y` for every node — the file is the layout,
+  not the view. `export.spec.ts` hashes the CSV back into `positionsHash`.
+  Parquet deferred: it means loading DuckDB to dump three columns (D14).
+  **Column mapping dialog:** `IngestOptions` was plumbed to the Rust parser
+  since M1 and had no UI, so a semicolon file or an edge outside the first two
+  columns could not be opened. Sniffs delimiter and header over a 64 KB preview,
+  using a second tiny CSV reader — deliberate, since the real one only exists
+  inside a streaming ingest. `tests/helpers.ts::dropFixture` now clicks through
+  the dialog, which is why every ingesting spec still works unchanged.
+- **M5:** not started; see §11 — distribution (D10) is already done, and the
+  static deploy is live at skein.diegoglozano.com. What is left is the
+  compatibility matrix (nothing has been run on Safari or Firefox) and docs.
 - **skein-native — a second, macOS-only front end (D15, 2026-08-02).** Parallel
   track; the web app is untouched and stays primary. `crates/skein-native` is a
   winit window on a wgpu/Metal surface with no browser, no webview and no WASM,
@@ -320,6 +345,9 @@ its numbers for performance decisions (D3/D5).
 
 ## Gotchas
 
+- Every ingesting test goes through the §10 column mapping dialog, which
+  `dropFixture` accepts on their behalf. A spec that drops a file by hand has to
+  click `mapping-import` itself.
 - Fixtures are generated, never committed; they live in `bench/fixtures/` and
   are served at `/fixtures/*` by a Vite plugin (dev + preview) — don't move
   them into `web/public/` (they'd get copied into dist).

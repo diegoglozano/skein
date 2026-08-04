@@ -21,6 +21,16 @@ export const SIZE_MAX = 3.0;
 /** A node whose size code is this is drawn at the unstyled point size. */
 export const NEUTRAL_SIZE_CODE = 52;
 
+/**
+ * The colour an unstyled node draws in, 0..255 — interpolated into both
+ * shaders, so it is stated once. It has to be reachable from TypeScript
+ * because hiding nodes is a property of this buffer and nothing else: a graph
+ * with no attributes attached still needs a style array the moment the user
+ * isolates a subgraph, and filling it with anything else would repaint the
+ * whole graph as a side effect of hiding part of it.
+ */
+export const UNSTYLED_NODE_RGB = { r: 217, g: 222, b: 242 } as const;
+
 /** Size code for a node the current filter excludes. */
 export const HIDDEN_SIZE_CODE = 0;
 
@@ -36,6 +46,35 @@ export function packStyle(r: number, g: number, b: number, size: number): number
 }
 
 /**
+ * Hide every node the mask excludes (§10 "isolate subgraph"), keeping whatever
+ * colour the surviving nodes already had — zeroing the top byte is exactly
+ * `HIDDEN_SIZE_CODE`, and the renderer takes those nodes' edges with them.
+ *
+ * `style` may be null, which is the ordinary case: a graph with no attributes
+ * attached has no style buffer at all until something needs to hide part of
+ * it. The array built for that case is uniform `UNSTYLED_NODE_RGB` at the
+ * neutral size, so isolating changes visibility and nothing else.
+ *
+ * Returns a new array rather than mutating: the attribute style is the panel's
+ * to own and re-issue, and isolating must not consume it.
+ */
+export function applyVisibilityMask(
+  style: Uint32Array | null,
+  mask: Uint8Array,
+  nodeCount: number,
+): Uint32Array {
+  const out = style ? Uint32Array.from(style) : new Uint32Array(nodeCount);
+  if (!style) {
+    const { r, g, b } = UNSTYLED_NODE_RGB;
+    out.fill(packStyle(r, g, b, NEUTRAL_SIZE_CODE));
+  }
+  for (let i = 0; i < nodeCount; i++) {
+    if (!mask[i]) out[i] = out[i] & 0x00ffffff;
+  }
+  return out;
+}
+
+/**
  * The shared shader source for decoding a packed style. Both backends inline
  * this so the mapping cannot drift between them — it is written once here, in
  * the two shading languages, next to the TypeScript that produces the bytes.
@@ -48,9 +87,15 @@ export function packStyle(r: number, g: number, b: number, size: number): number
  */
 const f = (n: number) => n.toFixed(4);
 
+/** `UNSTYLED_NODE_RGB` as a shader-source rgb triple, 0..1. */
+const unstyledRgb = [UNSTYLED_NODE_RGB.r, UNSTYLED_NODE_RGB.g, UNSTYLED_NODE_RGB.b]
+  .map((c) => f(c / 255))
+  .join(', ');
+
 export const STYLE_DECODE_WGSL = /* wgsl */ `
 const SIZE_MIN: f32 = ${f(SIZE_MIN)};
 const SIZE_MAX: f32 = ${f(SIZE_MAX)};
+const UNSTYLED_NODE: vec3f = vec3f(${unstyledRgb});
 
 // .xyz is the colour in 0..1; .w is the size code, also in 0..1 (i.e. code/255).
 fn styleSize(w: f32) -> f32 {
@@ -58,6 +103,8 @@ fn styleSize(w: f32) -> f32 {
 }
 `;
 
+// The GLSL side has no matching constant: WebGL2 passes the unstyled colour in
+// as a uniform, so it reads `UNSTYLED_NODE_RGB` from TypeScript directly.
 export const STYLE_DECODE_GLSL = /* glsl */ `
   const float SIZE_MIN = ${f(SIZE_MIN)};
   const float SIZE_MAX = ${f(SIZE_MAX)};

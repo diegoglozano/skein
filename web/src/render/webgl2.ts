@@ -4,7 +4,7 @@
 // instances read their position through the seeded draw order (D13). No
 // per-frame uploads.
 
-import { STYLE_DECODE_GLSL } from './style';
+import { STYLE_DECODE_GLSL, UNSTYLED_NODE_RGB } from './style';
 import type { DrawLimits, RenderGraph, Renderer, ViewTransform } from './types';
 
 /** Texture width for the position store; height grows with node count. */
@@ -348,7 +348,13 @@ export function createWebGl2Renderer(canvas: HTMLCanvasElement): Renderer | null
       gl.uniform2f(nodeU.offset, view.offsetX, view.offsetY);
       gl.uniform2f(nodeU.viewportPx, view.widthPx, view.heightPx);
       gl.uniform1f(nodeU.pointSizePx, view.pointSizePx);
-      gl.uniform4f(nodeU.color, 0.85, 0.87, 0.95, 0.9);
+      gl.uniform4f(
+        nodeU.color,
+        UNSTYLED_NODE_RGB.r / 255,
+        UNSTYLED_NODE_RGB.g / 255,
+        UNSTYLED_NODE_RGB.b / 255,
+        0.9,
+      );
       gl.uniform1i(nodeU.positions, 0);
       gl.uniform1i(nodeU.nodeStyle, 1);
       gl.uniform1f(nodeU.styled, styleFlag);

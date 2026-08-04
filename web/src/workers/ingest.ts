@@ -95,19 +95,27 @@ function cachedCsr(id: string): Promise<CsrBuffers> {
   return csrCache.csr;
 }
 
-/** 1-hop neighbourhood, both directions. The traversal itself is
- * `skein_core::neighbors` — algorithms stay in the core crate, natively
+/** k-hop neighbourhood, both directions. The traversal itself is
+ * `skein_core::khop` — algorithms stay in the core crate, natively
  * tested; this only moves buffers. */
-async function neighbors(id: string, node: number) {
+async function neighbors(id: string, node: number, hops: number) {
   await ready;
   const { offsets, targets } = await cachedCsr(id);
-  const { neighbors: list, total } = node_neighbors(offsets, targets, node, NEIGHBOR_CAP) as {
+  const {
+    neighbors: list,
+    parents,
+    total,
+    mask,
+  } = node_neighbors(offsets, targets, node, hops, NEIGHBOR_CAP) as {
     neighbors: Uint32Array;
+    parents: Uint32Array;
     total: number;
+    mask: Uint8Array;
   };
-  postMessage({ type: 'neighbors', id, node, neighbors: list, total } satisfies FromWorker, {
-    transfer: [list.buffer],
-  });
+  postMessage(
+    { type: 'neighbors', id, node, hops, neighbors: list, parents, total, mask } satisfies FromWorker,
+    { transfer: [list.buffer, parents.buffer, mask.buffer] },
+  );
 }
 
 function post(msg: FromWorker) {
@@ -381,7 +389,7 @@ onmessage = async (event: MessageEvent<ToWorker>) => {
         break;
       }
       case 'neighbors':
-        await neighbors(msg.id, msg.node);
+        await neighbors(msg.id, msg.node, msg.hops);
         break;
       case 'hierarchy': {
         await ready;

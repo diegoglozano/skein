@@ -138,6 +138,65 @@ export function visibleNodeCount(
 }
 
 /**
+ * Every node inside the world-space rectangle (§10 box select), ascending,
+ * truncated to `cap`, plus the honest total before truncation.
+ *
+ * Unlike `visibleNodeCount` this cannot count by cell — a box select has to
+ * name the nodes, so boundary cells are walked node by node and tested against
+ * the rectangle itself. The interior is still bounded by the grid, so the cost
+ * is the selection's size rather than the graph's.
+ *
+ * Ascending order comes free from the scatter: `cellNodes` is filled by
+ * sweeping node indices upward, so each cell's slice is already ascending, and
+ * cells are visited row-major. That is not globally sorted, so the caller gets
+ * the sort — but only over the capped prefix, which is the point of doing it
+ * here rather than over a million hits.
+ */
+export function nodesInRect(
+  index: PickIndex,
+  positions: Float32Array,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+  cap: number,
+): { nodes: Uint32Array; total: number; mask: Uint8Array } {
+  const { minX: ox, minY: oy, cellSize, cols, rows, cellStart, cellNodes } = index;
+  const cell = (v: number, cells: number) =>
+    Math.min(cells - 1, Math.max(0, Math.floor(v / cellSize)));
+  // One byte per node for the whole selection, capped list or not — the same
+  // bargain `skein_core::khop` strikes: isolating against the truncated list
+  // would hide a different graph than the count on screen claims.
+  const mask = new Uint8Array(positions.length >> 1);
+  const outside = { nodes: new Uint32Array(0), total: 0, mask };
+  if (maxX < ox || maxY < oy) return outside;
+  if (minX > ox + cols * cellSize || minY > oy + rows * cellSize) return outside;
+
+  const gx0 = cell(minX - ox, cols);
+  const gx1 = cell(maxX - ox, cols);
+  const gy0 = cell(minY - oy, rows);
+  const gy1 = cell(maxY - oy, rows);
+
+  const hits: number[] = [];
+  let total = 0;
+  for (let gy = gy0; gy <= gy1; gy++) {
+    const from = cellStart[gy * cols + gx0];
+    const to = cellStart[gy * cols + gx1 + 1];
+    for (let s = from; s < to; s++) {
+      const node = cellNodes[s];
+      const x = positions[2 * node];
+      const y = positions[2 * node + 1];
+      if (x < minX || x > maxX || y < minY || y > maxY) continue;
+      total++;
+      mask[node] = 1;
+      if (hits.length < cap) hits.push(node);
+    }
+  }
+  hits.sort((a, b) => a - b);
+  return { nodes: Uint32Array.from(hits), total, mask };
+}
+
+/**
  * Nearest node to (x, y) within `radius` world units, or -1. Ties break to the
  * lower node index so hover is deterministic (§6) rather than dependent on
  * scatter order.

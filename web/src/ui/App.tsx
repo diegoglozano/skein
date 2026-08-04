@@ -6,7 +6,7 @@ import type {
   LoadedGraph,
   ToWorker,
 } from '../workers/protocol';
-import { DEFAULT_INGEST_OPTIONS } from '../workers/protocol';
+import type { IngestOptions } from '../workers/protocol';
 import {
   DEFAULT_SAMPLE,
   SAMPLE_LIMITS,
@@ -14,6 +14,7 @@ import {
   sampleSpecError,
   type SampleSpec,
 } from '../workers/generate';
+import { ColumnMapping } from './ColumnMapping';
 import { GraphView } from './GraphView';
 
 const STAGE_LABELS: Record<IngestStage, string> = {
@@ -111,17 +112,17 @@ export function App() {
     return () => worker.terminate();
   }, []);
 
-  const ingest = useCallback((file: File) => {
+  /** A dropped file waiting on the column mapping dialog (§10). */
+  const [pending, setPending] = useState<File | null>(null);
+
+  const ingest = useCallback((file: File, options: IngestOptions) => {
+    setPending(null);
     setVerifyResult(null);
     setState({
       phase: 'working',
       progress: { stage: 'parse', bytesRead: 0, totalBytes: file.size, nodes: 0, edges: 0 },
     });
-    workerRef.current?.postMessage({
-      type: 'ingest',
-      file,
-      options: DEFAULT_INGEST_OPTIONS,
-    } satisfies ToWorker);
+    workerRef.current?.postMessage({ type: 'ingest', file, options } satisfies ToWorker);
   }, []);
 
   const generate = useCallback((spec: SampleSpec) => {
@@ -133,15 +134,12 @@ export function App() {
     workerRef.current?.postMessage({ type: 'generate', spec } satisfies ToWorker);
   }, []);
 
-  const onDrop = useCallback(
-    (event: React.DragEvent) => {
-      event.preventDefault();
-      setDragOver(false);
-      const file = event.dataTransfer.files[0];
-      if (file) ingest(file);
-    },
-    [ingest],
-  );
+  const onDrop = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    setDragOver(false);
+    const file = event.dataTransfer.files[0];
+    if (file) setPending(file);
+  }, []);
 
   const openGraph = useCallback((summary: GraphSummary) => {
     // The cache is fed by the worker (`graphs`, `attributes-saved`) and is the
@@ -195,6 +193,13 @@ export function App() {
         </aside>
       )}
 
+      {pending ? (
+        <ColumnMapping
+          file={pending}
+          onCancel={() => setPending(null)}
+          onImport={(options) => ingest(pending, options)}
+        />
+      ) : (
       <main
         className={`dropzone${dragOver ? ' dragover' : ''}`}
         aria-label="file drop zone"
@@ -205,10 +210,10 @@ export function App() {
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
       >
-        <p>Drop an edge list here — CSV with source,target columns</p>
+        <p>Drop an edge list here — CSV, one edge per row</p>
         <p className="muted">
-          Parquet/Arrow and column mapping land later; header row expected. The M0
-          renderer spike lives at <a href="/spike.html?fixture=tiny">/spike.html</a>.
+          You pick the columns and the delimiter next, over a preview of the file.
+          Parquet and Arrow land later.
         </p>
         <label className="file-pick">
           or choose a file
@@ -218,7 +223,7 @@ export function App() {
             hidden
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) ingest(file);
+              if (file) setPending(file);
               e.target.value = '';
             }}
           />
@@ -325,6 +330,7 @@ export function App() {
           </div>
         )}
       </main>
+      )}
 
       {recent.length > 0 && (
         <section className="recent" aria-label="recent graphs">

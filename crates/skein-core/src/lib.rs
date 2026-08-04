@@ -19,7 +19,7 @@ pub use coarsen::{
 };
 pub use csr::{Csr, CsrBuf, CsrView};
 pub use csv::CsvScanner;
-pub use explore::{neighbors, total_degrees};
+pub use explore::{khop, neighbors, total_degrees, Neighborhood};
 pub use ingest::{EdgeIngest, IngestConfig, IngestOutput};
 pub use interner::Interner;
 pub use layout::{
